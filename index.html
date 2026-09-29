@@ -2967,7 +2967,7 @@ async function callModel(q, image){
   const c = activeChannel();
   if (!c.base || !c.key || !c.model) throw new Error('NO_CHANNEL');
 
-  const url = c.base.replace(/\/+$/,'') + '/chat/completions';
+  const url = aiEndpoint(c.base, '/chat/completions');
   const ctrl = new AbortController();
   const timer = setTimeout(()=>ctrl.abort(), 30000);
 
@@ -2975,18 +2975,13 @@ async function callModel(q, image){
   try {
     res = await fetch(url, {
       method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+c.key },
-      body: JSON.stringify({
-        model: c.model,
-        messages: buildMessages(q, image),
-        temperature: 0.3,
-        max_tokens: 600,
-      }),
+      headers: aiHeaders(c.key),
+      body: JSON.stringify(aiRequestBody(c.model, buildMessages(q, image), {temperature:0.3, max_tokens:600})),
       signal: ctrl.signal,
     });
   } catch(e){
     clearTimeout(timer);
-    throw new Error(e.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK');
+    throw new Error(formatAiNetworkError(e));
   }
   clearTimeout(timer);
 
@@ -3022,11 +3017,16 @@ function diagnose(err){
     HTTP_404:'端点或模型名不存在。检查 Base URL 是否漏了 /v1 之类的路径。',
     HTTP_429:'请求太频繁或额度用尽，稍后再试。',
     HTTP_500:'服务商内部错误，稍后重试。',
+    MODELS_EMPTY:'接口返回成功，但没有可用模型 id。请按服务商文档手动填写模型名。',
   };
   if (M[err.message]) return M[err.message];
   if (err.message.startsWith('HTTP_'))
     return `请求失败（${err.message.slice(5)}）。` + (err.detail
       ? '<br><span style="opacity:.7;font-size:10.5px">'+err.detail.replace(/</g,'&lt;')+'</span>' : '');
+  if (err.message === 'NETWORK' && location.protocol === 'file:')
+    return '当前页面通过 file:// 打开，模型服务商可能拒绝 Origin: null。请使用 GitHub Pages、localhost 或其他 HTTPS 地址。';
+  if (err.message === 'NETWORK')
+    return '浏览器无法读取该接口，可能是 CORS、网络、API Key 或 Base URL 不正确。';
   return '出了点问题：' + err.message;
 }
 
@@ -3947,7 +3947,7 @@ function bindChatActions(){
 /* ══ 设置 ══ */
 /* 常用 OpenAI 兼容接口预设。预设不代表 Key 一定有权限，实际模型以 /models 返回为准。 */
 const PRESETS = {
-  deepseek:{base:'https://api.deepseek.com/v1',                       model:'deepseek-chat'},
+  deepseek:{base:'https://api.deepseek.com',                          model:'deepseek-chat'},
   zhipu:   {base:'https://open.bigmodel.cn/api/paas/v4',              model:'glm-4-flash'},
   qwen:    {base:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-plus'},
   doubao:  {base:'https://ark.cn-beijing.volces.com/api/v3',          model:'doubao-pro-32k'},
@@ -4049,16 +4049,34 @@ function saveSettings(){
   toast('已保存，AI 辅助出行已接入你的模型');
 }
 
-/* 真实连通性测试：发一条最小请求，验证 Base URL / Key / 模型名 三者是否都对 */
+/* 真实连通性测试：先读取模型列表，再用与正式聊天相同的请求结构验证模型响应。 */
 async function testSettings(){
   const box = $('testResult');
-  const base = $('fBase').value.trim(), key = $('fKey').value.trim(), model = $('fModel').value.trim();
+  const base = normalizeAiBase($('fBase').value), key = $('fKey').value.trim(), model = $('fModel').value.trim();
   if (!base || !key || !model){
     box.innerHTML = `<div class="testbox err">✕ 请先填完 Base URL / API Key / 模型名</div>`; return;
   }
-  box.innerHTML = `<div class="testbox run">⏳ 正在连接 ${base.replace(/</g,'&lt;')} …</div>`;
+  $('fBase').value = base;
+  box.innerHTML = `<div class="testbox run">⏳ 正在检索模型并验证 ${aiEscape(base)} …</div>`;
 
-  const url = base.replace(/\/+$/,'') + '/chat/completions';
+  let listedIds = null;
+  try{
+    listedIds = await fetchAiModels(base, key);
+    if (!listedIds.includes(model)){
+      const select = $('fModelSelect');
+      select.innerHTML = '<option value="">选择一个模型</option>' + listedIds.map(id=>`<option value="${aiEscape(id)}">${aiEscape(id)}</option>`).join('');
+      box.innerHTML = `<div class="testbox err">✕ 当前模型不在该 Key 的可用列表中<br><span style="opacity:.85">请选择模型列表中的实际 id，再重新测试。</span></div>`;
+      return;
+    }
+  }catch(err){
+    /* 部分兼容服务不提供 /models；404/405 时仍用真实聊天请求继续验证。 */
+    if (!['HTTP_404','HTTP_405'].includes(err.message)){
+      box.innerHTML = `<div class="testbox err">✕ 无法读取模型列表，尚未进行聊天测试<br><span style="opacity:.85">${diagnose(err)}</span></div>`;
+      return;
+    }
+  }
+
+  const url = aiEndpoint(base, '/chat/completions');
   const ctrl = new AbortController();
   const timer = setTimeout(()=>ctrl.abort(), 20000);
   const t0 = performance.now();
@@ -4066,8 +4084,8 @@ async function testSettings(){
   try {
     const res = await fetch(url, {
       method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+key },
-      body: JSON.stringify({ model, messages:[{role:'user',content:'ping'}], max_tokens:5 }),
+      headers: aiHeaders(key),
+      body: JSON.stringify(aiRequestBody(model, [{role:'user',content:'请只回复：连接成功'}], {temperature:0, max_tokens:8})),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -4082,12 +4100,17 @@ async function testSettings(){
     }
     const data = await res.json();
     const got = data?.choices?.[0]?.message?.content || '';
-    box.innerHTML = `<div class="testbox ok">✓ 连接成功 · ${ms}ms<br>
+    if (!got){
+      box.innerHTML = '<div class="testbox err">✕ 接口返回成功，但没有可读取的模型回复<br><span style="opacity:.85">请确认该模型支持 chat/completions。</span></div>';
+      return;
+    }
+    const modelNote = listedIds ? '，已从 /models 核验' : '，该服务未提供 /models，已用实际聊天请求核验';
+    box.innerHTML = `<div class="testbox ok">✓ 模型实际响应 · ${ms}ms${modelNote}<br>
       <span style="opacity:.85">模型 <b>${model.replace(/</g,'&lt;')}</b> 已响应
       ${got ? '（'+got.replace(/</g,'&lt;').slice(0,24)+'）' : ''}。可以保存了。</span></div>`;
   } catch(e){
     clearTimeout(timer);
-    const err = new Error(e.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK');
+    const err = new Error(formatAiNetworkError(e));
     box.innerHTML = `<div class="testbox err">✕ 连接失败<br>
       <span style="opacity:.85">${diagnose(err)}</span></div>`;
   }
@@ -4465,6 +4488,16 @@ $('closeSettings').onclick = closeSettings;
 $('settingsMask').onclick = e=>{ if (e.target.id==='settingsMask') closeSettings(); };
 $('saveSettings').onclick  = saveSettings;
 $('testSettings').onclick  = testSettings;
+$('discoverModels').onclick = discoverModels;
+$('fModelSelect').onchange = e=>{ if (e.target.value) $('fModel').value = e.target.value; };
+$('baseUrlPreset').onchange = e=>{
+  const v = PRESETS[e.target.value];
+  if (!v) return;
+  $('fBase').value = v.base;
+  $('fModel').value = v.model || '';
+  resetModelSelect('先检索模型列表');
+  document.querySelectorAll('#presetPills .pill').forEach(x=>x.classList.toggle('on', x.dataset.p===e.target.value));
+};
 $('resetSettings').onclick = ()=>{
   S.api = {mode:'default'}; sessionStore.del('api'); closeSettings(); render();
   toast('已清除本次 API 会话中的 Key');
@@ -4485,7 +4518,8 @@ document.querySelectorAll('#presetPills .pill').forEach(p=>{
     document.querySelectorAll('#presetPills .pill').forEach(x=>x.classList.remove('on'));
     p.classList.add('on');
     const v = PRESETS[p.dataset.p];
-    if (v){ $('fBase').value = v.base; $('fModel').value = v.model; }
+    if (v){ $('fBase').value = v.base; $('fModel').value = v.model; resetModelSelect('先检索模型列表'); }
+    $('baseUrlPreset').value = p.dataset.p;
     $('fKey').focus();
   };
 });
