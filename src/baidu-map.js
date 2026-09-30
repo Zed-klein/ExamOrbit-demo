@@ -791,14 +791,32 @@
           const pl = w.getResults();
           if (!pl || pl.getNumPlans() === 0) return fin(null);
           const plan = pl.getPlan(0), r0 = plan.getRoute(0);
-          /* 逐段指引：BMapGL 是 getNumSteps()/getStep(i)（不是 getSteps()），
-             每段有 getDescription()（带 <b> 标签）/ getDistance() / getPosition()。 */
+          /* 逐段指引：BMapGL 是 getNumSteps()/getStep(i)（不是 getSteps()）。
+             不同版本 / 服务区域可能暴露不同的文字字段，统一尽量读取；
+             没有文字时由上层按路线几何推算转向，但不会伪造道路名称。 */
           const steps = [];
           try{
             const n = (typeof r0.getNumSteps === 'function') ? r0.getNumSteps() : 0;
             for (let i = 0; i < n; i++){
               const st = r0.getStep(i);
-              if (!st || typeof st.getDescription !== 'function') continue;
+              if (!st) continue;
+              const read = name=>{
+                try{
+                  if (typeof st[name] === 'function') return st[name]();
+                  return st[name];
+                }catch(e){ return ''; }
+              };
+              const clean = value=>String(value || '').replace(/<[^>]+>/g, '').trim();
+              const desc = clean(
+                read('getDescription') || read('getInstruction') ||
+                read('getInstructions') || read('description') ||
+                read('instruction')
+              );
+              const road = clean(
+                read('getStreetName') || read('getRoadName') ||
+                read('getRoad') || read('streetName') ||
+                read('roadName') || read('road') || read('title')
+              );
               let pt = null;
               try{
                 const p = (typeof st.getPosition === 'function') ? st.getPosition()
@@ -806,8 +824,9 @@
                 if (p) pt = [+p.lng.toFixed(6), +p.lat.toFixed(6)];
               }catch(e){}
               steps.push({
-                desc: String(st.getDescription() || '').replace(/<[^>]+>/g, ''),
-                dist: (typeof st.getDistance === 'function') ? st.getDistance() : '',
+                desc,
+                road,
+                dist: read('getDistance') || '',
                 pt,
               });
             }
@@ -1072,6 +1091,22 @@
     return run();
   }
 
+  /* 驾车分段的 JSAPI 结果经常只有几何点和距离，没有道路名。
+     只在用户打开正式路线页时由上层按需调用，避免为每家住宿预先消耗逆地理编码额度。 */
+  async function enrichDrivingRoute(route){
+    if (!route || !Array.isArray(route.steps) || !route.steps.length)
+      return route || null;
+    if (route._roadEnriched) return route;
+
+    const steps = await Promise.all(route.steps.map(async step=>{
+      if (!step || step.road || !step.pt) return step;
+      const geo = await reverseGeocode(step.pt).catch(()=>null);
+      const road = geo && String(geo.street || '').trim();
+      return road ? Object.assign({}, step, { road }) : step;
+    }));
+    return Object.assign({}, route, { steps, _roadEnriched:true });
+  }
+
   /* 网格撒点批量取 POI */
   async function reverseGrid(center, spanM, step){
     const byKey = {};
@@ -1147,7 +1182,7 @@
     onCenterDrag: (f)=>{ onCenterDrag = f; },
     onPoiClick: (f)=>{ onPoiClick = f; },
     clearRoutes, drawRoute, setPickMode, onMapPick, showNameCard, hideNameCard,
-    route, transit, pointAtDistance, searchNearby,
+    route, transit, pointAtDistance, searchNearby, enrichDrivingRoute,
     bd09ToWgs84, gcj02ToWgs84, bd09ToGcj02, reversePois, reverseGeocode, reverseGrid,
     showCandidates, clearCandidates,
     onCandClick: (f)=>{ onCandClick = f; },

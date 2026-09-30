@@ -2127,6 +2127,16 @@ async function bootRealMap(){
     const ph = (snapSite()?.hotels || []).filter(h=>h.route && h.route.source==='placeholder').length;
     if (ph) toast(`⚠️ ${ph} 条路线为占位数据，请用 snapshot-builder.html 生成`);
   }catch(e){
+    /* 地图 SDK 已经初始化成功后，后续图层同步或环境刷新异常
+       不应把真实 BMapGL 隐藏掉并误报为离线示意图。
+       只有初始化 / 鉴权本身失败才回落 SVG。 */
+    if (e.message !== 'AK_REJECTED' && KDRMap.isReady()){
+      box.classList.remove('hidden');
+      $('svgMap').classList.add('hidden');
+      $('bmapStatus').innerHTML = '<i style="background:#4ADE80"></i>百度地图已接入';
+      console.warn('[KDR] 地图已接入，但初始化后的同步步骤失败：', e);
+      return;
+    }
     box.classList.add('hidden');
     $('svgMap').classList.remove('hidden');
     if (note.parentNode) note.remove();
@@ -2962,6 +2972,31 @@ function parseImageSite(raw){
   }catch(e){ return null; }
 }
 
+/* 兼容常见 OpenAI 兼容层的多种回复形态。
+   不同中转站可能把 content 返回成字符串、文本片段数组，或把推理模型的
+   可见答案放在 reasoning_content；不能只用 data.choices[0].message.content。 */
+function aiTextPart(value){
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(aiTextPart).filter(Boolean).join('');
+  if (value && typeof value === 'object'){
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.content === 'string') return value.content;
+  }
+  return '';
+}
+function extractAiReplyText(data){
+  const choice = data && Array.isArray(data.choices) ? data.choices[0] : null;
+  const message = choice && choice.message;
+  const direct = aiTextPart(message && message.content) || aiTextPart(choice && choice.text);
+  if (direct.trim()) return direct.trim();
+  const reasoning = aiTextPart(message && (message.reasoning_content || message.reasoning));
+  if (reasoning.trim()) return reasoning.trim();
+  if (data && typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
+  const output = data && Array.isArray(data.output) ? data.output : [];
+  const fromOutput = output.map(item=>aiTextPart(item && item.content)).filter(Boolean).join('').trim();
+  return fromOutput || '';
+}
+
 /* 真实调用。返回 {text, actions, imageSite} */
 async function callModel(q, image){
   const c = activeChannel();
@@ -2992,7 +3027,7 @@ async function callModel(q, image){
     throw err;
   }
   const data = await res.json();
-  const raw = data?.choices?.[0]?.message?.content || '';
+  const raw = extractAiReplyText(data);
   if (!raw) throw new Error('EMPTY');
 
   const actions = parseModelActions(raw);
@@ -3091,6 +3126,60 @@ function aiPlanSummary(plan){
 }
 let aiFlowId = 0;
 let aiChoiceId = 0;
+function setAIWorkflow(stage, patch){
+  S.aiWorkflow = Object.assign({
+    stage,
+    candidates: [],
+    token: 0,
+    site: null,
+    hotel: null,
+    mode: null,
+  }, patch || {});
+  return S.aiWorkflow;
+}
+function resetAIWorkflow(){
+  setAIWorkflow('idle');
+}
+function aiWorkflowStageText(){
+  const labels = {
+    site_searching:'正在查找考点',
+    site_choice:'等待确认考点',
+    origin_searching:'正在查找出发地点',
+    origin_choice:'等待确认出发地点',
+    nearby_ready:'等待确认是否规划住宿',
+    hotel_choice:'等待选择居住点',
+    route_building:'正在生成正式路线',
+    route_ready:'已生成正式路线',
+    idle:'未开始',
+  };
+  return labels[S.aiWorkflow && S.aiWorkflow.stage] || labels.idle;
+}
+function aiChoiceIndex(text, items){
+  const list = Array.isArray(items) ? items : [];
+  const raw = String(text || '').trim();
+  if (!raw || !list.length) return -1;
+  const digit = raw.match(/(?:第\s*)?([1-9]\d?)(?:\s*个|\s*号)?/);
+  if (digit){
+    const i = Number(digit[1]) - 1;
+    if (i >= 0 && i < list.length) return i;
+  }
+  const cn = {'一':0,'二':1,'两':1,'三':2,'四':3,'五':4,'六':5,'七':6,'八':7,'九':8};
+  const word = raw.match(/第?\s*([一二两三四五六七八九])\s*(?:个|项|号)?/);
+  if (word && cn[word[1]] < list.length) return cn[word[1]];
+  const normalized = raw.replace(/^(我选|选择|选|我要|就选)\s*/,'').trim();
+  const hit = list.findIndex(x=>{
+    const name = typeof x === 'string' ? x : (x && (x.name || x.n || ''));
+    return name && (normalized === name || normalized.includes(name) || name.includes(normalized));
+  });
+  return hit;
+}
+function aiAffirmative(text){
+  return /^(是|好|好的|可以|行|确定|确认|开始|开始规划|进入规划|继续|没问题|对|要)$/i.test(String(text || '').trim())
+    || /^(是的|开始吧|继续规划|进入行程可视化)/.test(String(text || '').trim());
+}
+function aiNegative(text){
+  return /^(否|不是|不用|不要|取消|暂不|先不用|不规划|否定|先看周边设施)$/i.test(String(text || '').trim());
+}
 function aiContextKey(base){
   const center = curCenter();
   return JSON.stringify([base.origin && base.origin.pt, base.origin && base.origin.name,
@@ -3548,7 +3637,8 @@ function renderChat(){
   document.querySelectorAll('#chat [data-ai-token]').forEach(button=>{
     const token = Number(button.dataset.aiToken);
     const isClear = button.dataset.aiChoice === 'clear-plan';
-    button.disabled = isClear
+    const isStatic = button.dataset.aiStatic === '1';
+    button.disabled = isStatic ? false : isClear
       ? !S.aiPlan || token !== S.aiPlan.token
       : !S.aiPending || token !== S.aiPending.token;
   });
@@ -3557,59 +3647,445 @@ function renderChat(){
 
 function aiScopeOK(q){
   const s = String(q || '');
-  return /考点|考场|校区|学校|住宿|酒店|路线|出行|步行|骑行|公交|地铁|驾车|开车|打车|天气|下雨|降雪|下雪|淋雨|早餐|餐馆|饭馆|打印|文具|药店|派出所|公安|医院|停车|服务点|几点|出发|到达|考试|准考证|地图|途径|中途|官方|官网|学校信息/.test(s);
+  return /考点|考场|校区|学校|大学|学院|住宿|酒店|路线|出行|步行|骑行|公交|地铁|驾车|开车|打车|天气|下雨|降雪|下雪|淋雨|早餐|餐馆|饭馆|打印|文具|药店|派出所|公安|医院|停车|服务点|几点|出发|到达|考试|准考证|地图|途径|中途|起点|终点|官方|官网|学校信息/.test(s);
 }
 function aiOutOfScopeReply(){
   return '抱歉，我只能协助考点定位、考试出行、路线规划、天气判断和考点周边服务查询。请重新描述与考试出行相关的问题。';
 }
 function aiExtractSiteQuery(q){
-  const text = String(q || '').replace(/[，。！？、,.!?]/g,' ');
-  const m = text.match(/(?:选择|定位|搜索|查找|打开|规划|查询)(?:到|一下|附近的|周边的)?\s*([^ ]{2,30}?)(?=\s*(?:周边|附近|考点|校区|的路线|相关设施|$))/);
-  if (m && m[1]) return m[1].trim();
-  const m2 = text.match(/([\u4e00-\u9fa5]{2,20}(?:大学|学院|学校|中学|考点|校区))/);
-  return m2 ? m2[1] : '';
+  const text = String(q || '').replace(/[，。！？、,.!?]/g,' ').replace(/\s+/g,' ').trim();
+  const generic = /^(?:一个)?(?:地址|考点|学校)(?:的?(?:路|路线))?$|^(?:路线|行程|出行|某个学校|这里)$/;
+  const clean = value => String(value || '')
+    .replace(/^(帮我|请|我想|我要|给我|帮忙|先|直接)\s*/,'')
+    .replace(/^(规划|定位|搜索|查找|查询|选择|打开)\s*/,'')
+    .replace(/^(一下|一个|附近的|周边的)\s*/,'')
+    .replace(/\s*(的)?(路线规划|路线|行程规划|出行规划|怎么走|怎么去)\s*$/,'')
+    .replace(/的$/,'')
+    .trim();
+  const m = text.match(/(?:选择|定位|搜索|查找|打开|规划|查询|去)\s*(?:到|一下|附近的|周边的)?\s*(.+?)(?=\s*(?:周边|附近|相关设施|路线规划|行程规划|怎么走|怎么去|$))/);
+  const first = clean(m && m[1]);
+  if (first && first.length >= 2 && first.length <= 80 && !generic.test(first)) return first;
+  const m2 = text.match(/([\u4e00-\u9fa5A-Za-z0-9（）()\-]{2,40}(?:大学|学院|学校|中学|考点|校区|路|街|巷|号))/);
+  const second = clean(m2 && m2[1]);
+  if (second && !generic.test(second)) return second;
+  const fallback = clean(text);
+  return fallback.length >= 2 && fallback.length <= 80 && !generic.test(fallback) ? fallback : '';
 }
-async function aiSearchSite(query, openTab){
+
+/* 本地规则引擎只做有限的信息槽位提取：
+   目的地 / 起点 / 出行方式。它不尝试理解任意长句，无法确定时就追问。 */
+function aiCleanPlace(value){
+  return String(value || '')
+    .replace(/[“”"'‘’]/g,'')
+    .replace(/^[\s，。,、:：]+|[\s，。,、:：]+$/g,'')
+    .replace(/^(?:我想|我要|帮我|请|请问|从|由|在)\s*/,'')
+    .replace(/(?:优先|尽量|最好|选择|使用|采用)(?:走|乘坐|坐)?(?:公共交通|地铁|公交|骑行|自行车|步行|驾车|开车|打车).*$/,'')
+    .replace(/(?:规划|安排|查询|查看)?(?:路线|行程|出行规划|怎么走|怎么去).*$/,'')
+    .replace(/的$/,'')
+    .trim();
+}
+
+function aiExtractRouteRequest(q){
+  const text = String(q || '').replace(/[，。！？、,.!?]/g,' ').replace(/\s+/g,' ').trim();
+  const mode = aiModeKey(text);
+  let origin = '';
+  let destination = '';
+
+  /* “从 A 到 B”是最稳定的路线句式。 */
+  let m = text.match(/从\s*(.+?)\s*(?:到|去|前往)\s*(.+?)(?=\s*(?:优先|尽量|最好|选择|使用|采用|走|乘坐|坐)?(?:公共交通|地铁|公交|骑行|自行车|步行|驾车|开车|打车)?\s*(?:路线|规划|出发|$))/);
+  if (m){
+    origin = aiCleanPlace(m[1]);
+    destination = aiCleanPlace(m[2]);
+  }
+
+  /* “从 A 出发”但终点可能已经在当前页面或稍后补充。 */
+  if (!origin){
+    m = text.match(/(?:从|由)\s*(.+?)\s*(?:出发|开始|动身)/);
+    if (m) origin = aiCleanPlace(m[1]);
+  }
+
+  /* “起点 A，终点 B”或“起点是 A”。 */
+  if (!origin){
+    m = text.match(/起点(?:是|为|：|:)?\s*(.+?)(?=\s*(?:终点|到考点|去考点|优先|路线|$))/);
+    if (m) origin = aiCleanPlace(m[1]);
+  }
+  if (!destination){
+    m = text.match(/终点(?:是|为|：|:)?\s*(.+?)(?=\s*(?:优先|尽量|最好|选择|路线|$))/);
+    if (m) destination = aiCleanPlace(m[1]);
+  }
+
+  /* “帮我规划 B”或“去 B”只有目的地，没有起点。 */
+  if (!destination){
+    m = text.match(/(?:去|前往|到)\s*(.+?)(?=\s*(?:优先|尽量|最好|选择|使用|采用|公共交通|地铁|公交|骑行|自行车|步行|驾车|开车|打车|路线|规划|$))/);
+    if (m) destination = aiCleanPlace(m[1]);
+  }
+  /* 有明确起点但没有“到 / 终点 / 去某地”时，不把整句话误当成考点。
+     例如“从贵阳北站出发，优先公共交通”应只填起点。 */
+  const modeOnly = /^(?:请)?(?:优先|尽量|最好|选择|使用|采用)?(?:走|乘坐|坐)?(?:公共交通|地铁|公交|骑行|自行车|步行|驾车|开车|打车)$/;
+  if (!destination && !origin && !modeOnly.test(text)) destination = aiExtractSiteQuery(text);
+
+  const generic = /^(?:这里|当前考点|这个考点|考点|学校|路线|行程|出行)$/;
+  if (generic.test(destination)) destination = '';
+  if (generic.test(origin)) origin = '';
+
+  return {
+    siteQuery: destination,
+    originQuery: origin,
+    mode,
+    hasOrigin: !!origin,
+  };
+}
+
+function aiCurrentSiteMatches(query){
+  const q = aiCleanPlace(query).replace(/\s+/g,'');
+  if (!q || /^(?:这里|当前考点|这个考点|考点|学校|路线|行程|出行)$/.test(q)) return true;
+  const names = [
+    S.newSite && S.newSite.name,
+    SITE() && SITE().name,
+    S.newSite && S.newSite.addr,
+    SITE() && SITE().addr,
+  ].filter(Boolean).map(x=>String(x).replace(/\s+/g,''));
+  return names.some(name=>name === q || name.includes(q) || q.includes(name));
+}
+
+async function aiSearchSite(query, openTab, request){
   if (!KDRMap.isReady()){
     pushMsg('ai','地图尚未就绪，暂时无法查询新考点；请稍后再试或直接使用考点选择页。','');
     return;
   }
   const kw = String(query || '').trim();
   if (!kw){ pushMsg('ai','请告诉我学校或考点名称，例如“汕头大学医学院”。',''); return; }
+  request = request || {};
+  setAIWorkflow('site_searching', {
+    siteQuery:kw,
+    originQuery:request.originQuery || '',
+    mode:request.mode || null,
+  });
   const hint = geoHint();
-  const anchor = S.locatedAt || curCenter();
-  if (!anchor){ pushMsg('ai','请先选择省、市，或先在地图上定位一个大致区域。',''); return; }
+  const anchor = (await geocodeOne(hint ? hint + kw : kw, hint))
+    || (hint ? await geocodeOne(hint, '') : null);
+  if (!anchor){
+    resetAIWorkflow();
+    pushMsg('ai','无法确定考点的检索区域，请在考点选择页先选省、市，或输入更完整的校区与地址。','');
+    return;
+  }
   try{
     const r = await KDRQuota.call('placeSearch',
       ['ai-site', hint, kw, anchor[0].toFixed(3), anchor[1].toFixed(3)],
-      ()=>KDRMap.searchNearby(kw, anchor, 30000, 6),
+      ()=>KDRMap.searchNearby(kw, anchor, 50000, 6),
       { cacheIf:d=>Array.isArray(d) && d.length>0 });
-    const list = (r.data || []).filter(x=>x && x.bd09 && !/人民政府|区政府|街道办事处|居委会|委员会|管理局|政务/.test(x.name));
-    if (!list.length){ pushMsg('ai',`没有找到明确的“${aiEscape(kw)}”，可以换成更完整的学校或校区名称。`,''); return; }
+    const list = (r.data || []).filter(x=>x && x.bd09
+      && !/人民政府|区政府|街道办事处|居委会|委员会|管理局|政务/.test(x.name)
+      && !/轨道交通|公交线路|^\d+路[;；]/.test(x.addr || '')).slice(0,5);
+    if (!list.length){
+      resetAIWorkflow();
+      pushMsg('ai',`没有找到明确的“${aiEscape(kw)}”，可以换成更完整的学校或校区名称。`,'');
+      return;
+    }
     if (list.length > 1){
       const token = ++aiChoiceId;
-      S.aiPending = {type:'workflow-site-choice', candidates:list, openTab:openTab || 'nearby', token};
+      S.aiPending = {
+        type:'workflow-site-choice',
+        candidates:list,
+        openTab:openTab || 'nearby',
+        originQuery:request.originQuery || '',
+        mode:request.mode || null,
+        token,
+      };
+      setAIWorkflow('site_choice', {
+        candidates:list, token, siteQuery:kw,
+        originQuery:request.originQuery || '',
+        mode:request.mode || null,
+      });
       pushMsg('ai',`找到 ${list.length} 个可能的考点，请选择具体校区：<div class="acts">${
-        list.slice(0,5).map((x,i)=>`<button type="button" class="pill" data-ai-site="${i}" data-ai-token="${token}">${aiEscape(x.name)} · ${aiEscape(x.addr || '地址待核对')}</button>`).join('')
+        list.map((x,i)=>`<button type="button" class="pill" data-ai-site="${i}" data-ai-token="${token}">${aiEscape(x.name)} · ${aiEscape(x.addr || '地址待核对')}</button>`).join('')
       }</div>`,'');
       return;
     }
     const c = list[0];
-    await aiContinueAfterSite(c, hint);
+    await aiContinueAfterSite(c, hint, request);
   }catch(e){
+    resetAIWorkflow();
+    if (e.message === 'QUOTA_GUARD') showQuotaFull();
     pushMsg('ai', e.message === 'QUOTA_GUARD'
-      ? '百度地点检索额度已用完，请在弹出的额度提示中改用地图选点或更换自己的百度地图 AK。'
+      ? '百度地点检索额度已用完，请在额度提示中改用地图选点或更换自己的百度地图 AK。'
       : '考点查询暂时失败，请稍后再试。','');
   }
 }
-async function aiContinueAfterSite(c, hint){
+
+async function aiSearchOrigin(query, mode){
+  const kw = String(query || '').trim();
+  if (!kw){
+    pushMsg('ai','请提供酒店、住址、车站或其他出发地点。','');
+    return false;
+  }
+  if (!S.nearbyReady || !SITE()){
+    pushMsg('ai','请先确定考点并生成周边设施，再定位出发地点。','');
+    return false;
+  }
+
+  /* 当前考点的收录住宿优先本地精确匹配，不再额外消耗地点检索额度。 */
+  const local = HOTELS().find(h=>h.bd09 && (h.n === kw || h.n.includes(kw) || kw.includes(h.n)));
+  if (local){
+    await aiContinueAfterOrigin(local.bd09, local.n, mode);
+    return true;
+  }
+
+  setAIWorkflow('origin_searching', {originQuery:kw, mode:mode || null});
+  showProgress('正在定位出发地点…');
+  const center = curCenter();
+  if (!center){
+    hideProgress();
+    pushMsg('ai','当前没有可用的考点中心，无法确定出发地点检索范围。','');
+    return false;
+  }
+  /* LocalSearch 受地图视口影响，先把地图放到考点附近再检索。 */
+  if (KDRMap.focus) KDRMap.focus(center, 12);
+  await new Promise(r=>setTimeout(r,500));
+
+  let list = [];
+  try{
+    const r = await KDRQuota.call(
+      'placeSearch',
+      ['ai-origin', kw, center[0].toFixed(3), center[1].toFixed(3)],
+      ()=>KDRMap.searchNearby(kw, center, 50000, 6),
+      { cacheIf:d=>Array.isArray(d) && d.length > 0 }
+    );
+    list = (r.data || []).filter(x=>x && x.bd09 && x.name).slice(0,5);
+  }catch(e){
+    if (e.message === 'QUOTA_GUARD') showQuotaFull();
+  }
+
+  if (!list.length){
+    try{
+      const pt = await geocodeOne(kw, '');
+      if (pt) list = [{name:kw, addr:'按地址解析', bd09:pt, _geo:true}];
+    }catch(e){}
+  }
+  hideProgress();
+
+  if (!list.length){
+    setAIWorkflow('nearby_ready');
+    pushMsg('ai',`没有找到明确的出发地点“${aiEscape(kw)}”，请补充城市 / 区县，或直接使用地图选点。`,'');
+    return false;
+  }
+  if (list.length > 1){
+    const token = ++aiChoiceId;
+    S.aiPending = {type:'workflow-origin-choice', candidates:list, mode:mode || null, token};
+    setAIWorkflow('origin_choice', {candidates:list, token, originQuery:kw, mode:mode || null});
+    pushMsg('ai',`找到 ${list.length} 个可能的出发地点，请选择一个：<div class="acts">${
+      list.map((x,i)=>`<button type="button" class="pill" data-ai-origin="${i}" data-ai-token="${token}">${aiEscape(x.name)} · ${aiEscape(x.addr || '地址待核对')}</button>`).join('')
+    }</div>`,'');
+    return true;
+  }
+  const c = list[0];
+  await aiContinueAfterOrigin(c.bd09, c.name, mode);
+  return true;
+}
+
+async function aiContinueAfterOrigin(pt, name, mode){
+  if (!pt) return false;
+  setOrigin(pt, name || '出发地点');
+  if (mode) S.mode = mode;
+  S.routeMode = S.mode || 'drive';
+  setAIWorkflow('route_building', {
+    site:{name:(S.newSite && S.newSite.name) || (SITE() && SITE().name) || '考点', pt:curCenter()},
+    origin:{name:name || '出发地点', pt},
+    mode:S.routeMode,
+  });
+  await startPlan();
+  if (!S.planned){
+    setAIWorkflow('nearby_ready', {origin:{name:name || '出发地点', pt}, mode:S.routeMode});
+    pushMsg('ai','出发地点已写入，但百度这次没有返回可用路线。可以换一种出行方式，或稍后重试。','');
+    return false;
+  }
+
+  /* 有明确出行方式时自动打开第④页；没有指定时停在第③页让用户选住宿 / 方式。 */
+  if (mode){
+    await aiOpenFormalOriginRoute(mode);
+  } else {
+    switchTab('trip', {keepAIChat:true});
+    setAIWorkflow('route_ready', {origin:{name:name || '出发地点', pt}, mode:S.mode});
+    pushMsg('ai',`已写入出发地点 <b>${aiEscape(name || '出发地点')}</b>，行程已生成。你可以选择出行方式，或告诉我“打开详细路线”。`,'');
+  }
+  return true;
+}
+
+async function aiOpenFormalOriginRoute(mode){
+  if (!S.routeFor || !S.routeFor.origin || !S.routeFor.dest) return false;
+  S.routeMode = mode || S.routeMode || S.mode || 'drive';
+  switchTab('route', {keepAIChat:true});
+  renderRoutePlan(); renderMap(); renderLegend();
+  if (S.routeMode === 'metro'){
+    if (!S.transit) await buildTransit();
+  }else{
+    await ensureCorridor(S.routeMode);
+  }
+  await ensureAlong(S.routeMode);
+  renderRoutePlan(); renderMap(); renderLegend(); renderRain(S.rainPct);
+  syncFormalRouteInfo();
+  setAIWorkflow('route_ready', {
+    origin:S.routeFor.origin,
+    site:S.routeFor.dest,
+    mode:S.routeMode,
+  });
+  const result = S.routeMode === 'metro' ? S.transit : S.corridor && S.corridor[S.routeMode];
+  if (!result){
+    pushMsg('ai',`已打开路线规划，但百度没有返回可用的${aiEscape(aiModeName(S.routeMode))}路线；可以换一种方式重试。`,'');
+    return false;
+  }
+  pushMsg('ai',`已完成 <b>${aiEscape(S.routeFor.origin.name)}</b> → <b>${aiEscape(S.routeFor.dest.name)}</b> 的${aiEscape(aiModeName(S.routeMode))}路线，已同步到第④页和地图。`,'');
+  return true;
+}
+
+async function aiContinueAfterSite(c, hint, request){
+  request = request || {};
   setLocatedSite(c.bd09, c.name, hint || '', c.addr || '');
   await beginSearch();
-  S.aiPending = {type:'workflow-facility-confirm', token:++aiChoiceId};
+  if (!S.nearbyReady){
+    resetAIWorkflow();
+    pushMsg('ai','考点已定位，但周边设施尚未生成成功。请在考点选择页重试“开始检索”；本次没有生成住宿或路线。','');
+    return;
+  }
+  switchTab('nearby', {keepAIChat:true});
+  if (request.originQuery){
+    await aiSearchOrigin(request.originQuery, request.mode);
+    return;
+  }
+  if (S.origin && S.origin.pt){
+    await aiStartWorkflowPlan();
+    return;
+  }
+  S.aiPending = {type:'workflow-origin-choice', mode:request.mode || null, token:++aiChoiceId};
   const token = S.aiPending.token;
-  pushMsg('ai',`已定位到 <b>${aiEscape(c.name)}</b>，周边设施已生成。是否进入行程可视化并选择住宿？
-    <div class="acts"><button type="button" data-ai-choice="workflow-start-plan" data-ai-token="${token}">开始规划</button>
-    <button type="button" data-ai-choice="workflow-stay-nearby" data-ai-token="${token}">先看周边设施</button></div>`, '');
+  setAIWorkflow('origin_choice', {site:{name:c.name, pt:c.bd09}, token, mode:request.mode || null});
+  pushMsg('ai',`已定位到 <b>${aiEscape(c.name)}</b>，考点信息已写入第①页，周边设施也已生成。请告诉我出发地点（酒店、住址、车站），或回复“开始规划”让我列出住宿候选。`,'');
+}
+function aiHotelChoiceHtml(token){
+  const order = aiWorkflowHotelOrder();
+  return order.length ? order.map(x=>`<button type="button" class="ai-choice" data-ai-hotel="${x.i}" data-ai-token="${token}">
+      🏨 ${aiEscape(x.h.n)}<small>${hotelMin(x.h,'drive') == null ? '驾车时间待核验' : '预估驾车约 '+hotelMin(x.h,'drive')+' 分钟'} · ${aiEscape(x.h.a || '地址待核对')}</small></button>`).join('')
+    : '<span class="dim">当前考点暂未生成住宿数据，请先在前四个界面补充检索。</span>';
+}
+function aiWorkflowHotelOrder(){
+  const all = HOTELS();
+  return all.map((h,i)=>({h,i})).filter(x=>x.h && x.h.bd09)
+    .sort((a,b)=>(hotelMin(a.h,'drive') ?? 1e9) - (hotelMin(b.h,'drive') ?? 1e9))
+    .slice(0,8);
+}
+function aiFormalRouteActions(token){
+  const t = token || ++aiChoiceId;
+  return `<div class="acts">
+    <button type="button" data-ai-choice="workflow-open-route" data-ai-token="${t}" data-ai-static="1">打开详细路线</button>
+    <button type="button" data-ai-workflow-mode="drive" data-ai-token="${t}" data-ai-static="1">驾车</button>
+    <button type="button" data-ai-workflow-mode="walk" data-ai-token="${t}" data-ai-static="1">步行</button>
+    <button type="button" data-ai-workflow-mode="bike" data-ai-token="${t}" data-ai-static="1">骑行</button>
+    <button type="button" data-ai-workflow-mode="metro" data-ai-token="${t}" data-ai-static="1">公交 / 地铁</button>
+  </div>`;
+}
+async function aiSelectWorkflowHotel(index){
+  const h = HOTELS()[index];
+  if (!h || !h.bd09) {
+    pushMsg('ai','没有找到这个居住点，请从候选列表中重新选择。','');
+    return false;
+  }
+  S.aiPending = null;
+  S.hotelIdx = index;
+  S.mode = 'drive';
+  S.routeMode = 'drive';
+  S.shownRoutes[index] = 'drive';
+  S.nearbyMode = false;
+  S.routeFor = {
+    origin:{name:h.n, pt:h.bd09},
+    dest:{
+      name:(S.newSite && S.newSite.name) || (SITE() && SITE().name) || '考点',
+      pt:curCenter(),
+    },
+  };
+  S.transit = null;
+  S.alongCache = null;
+  /* 先保留路线起终点，但只有百度返回真实几何后才解除前置门控。 */
+  S.planned = false;
+  render();
+  const route = await drawChosenRoute(index, 'drive');
+  let detailed = route;
+  if (detailed && detailed.path && detailed.path.length > 1 &&
+      KDRMap.enrichDrivingRoute){
+    showProgress('正在补充驾车路段道路名称…');
+    detailed = await KDRMap.enrichDrivingRoute(detailed).catch(()=>detailed);
+    hideProgress();
+  }
+  S.corridor = detailed && detailed.path && detailed.path.length > 1
+    ? {drive:{path:detailed.path, distance:detailed.distance, duration:detailed.duration,
+              steps:detailed.steps || [], _roadEnriched:!!detailed._roadEnriched}}
+    : null;
+  renderRank();
+  renderMap();
+  if (!route || !route.path || route.path.length < 2){
+    const token = ++aiChoiceId;
+    S.aiPending = {type:'workflow-hotel-choice', token};
+    setAIWorkflow('hotel_choice', {token});
+    pushMsg('ai','百度暂未返回这家住宿的驾车路线，未生成正式路线。请重新选择住宿，或稍后重试。<div class="acts">' +
+      aiHotelChoiceHtml(token) + '</div>', '');
+    return false;
+  }
+  S.planned = true;
+  switchTab('route', {keepAIChat:true});
+  renderRoutePlan();
+  renderLegend();
+  syncFormalRouteInfo();
+  setAIWorkflow('route_ready', {hotel:{name:h.n, pt:h.bd09}, mode:'drive'});
+  const token = ++aiChoiceId;
+  pushMsg('ai',`已选择 <b>${aiEscape(h.n)}</b>，默认驾车路线已显示在地图上。路线规划：${aiEscape(h.a || '居住点')} → ${aiEscape((S.newSite && S.newSite.name) || (SITE() && SITE().name) || '考点')}。${aiEscape(route.distance || '距离未知')} · ${aiEscape(route.duration || '用时未知')}。${aiFormalRouteActions(token)}`, '');
+  return true;
+}
+async function aiStartWorkflowPlan(){
+  S.aiPending = null;
+  if (!S.nearbyReady){
+    pushMsg('ai','请先定位考点并生成周边设施，再开始行程规划。','');
+    return false;
+  }
+  S.mode = 'drive';
+  S.routeMode = 'drive';
+  await startPlan();
+  if (S.tab === 'trip') switchTab('trip', {keepAIChat:true});
+  if (!S.planned) return false;
+  if (S.origin && S.origin.pt){
+    setAIWorkflow('route_ready', {hotel:{name:S.origin.name, pt:S.origin.pt}, mode:S.mode || 'drive'});
+    const token = ++aiChoiceId;
+    pushMsg('ai',`已使用你填写的居住点 <b>${aiEscape(S.origin.name || '当前居住点')}</b>，默认驾车路线已经生成。你可以继续说“改成步行 / 骑行 / 公共交通”，或打开详细路线查看逐段指引。${aiFormalRouteActions(token)}`, '');
+    return true;
+  }
+  const token = ++aiChoiceId;
+  S.aiPending = {type:'workflow-hotel-choice', token};
+  setAIWorkflow('hotel_choice', {token});
+  pushMsg('ai', '已进入行程可视化，下面按默认驾车时间列出居住点，请选择一个：<div class="acts">' +
+    aiHotelChoiceHtml(token) + '</div>', '');
+  return true;
+}
+function aiFormalRouteMode(mode){
+  const i = Number.isInteger(+S.hotelIdx) ? +S.hotelIdx : -1;
+  return mode && i >= 0 && HOTELS()[i] && S.routeFor ? i : -1;
+}
+async function aiSwitchFormalRoute(mode){
+  const i = aiFormalRouteMode(mode);
+  if (i < 0){
+    pushMsg('ai','请先完成考点和居住点选择，再切换正式路线方式。','');
+    return;
+  }
+  S.mode = mode;
+  S.routeMode = mode;
+  S.shownRoutes[i] = mode;
+  await openRoutePlan(i, {keepAIChat:true});
+  setAIWorkflow('route_ready', {hotel:{name:HOTELS()[i].n, pt:HOTELS()[i].bd09}, mode});
+  const result = mode === 'metro' ? S.transit : S.corridor && S.corridor[mode];
+  if (!result){
+    pushMsg('ai',mode === 'metro'
+      ? '暂无公共交通推荐。百度没有返回这两个地点之间的可用公交 / 地铁方案，建议查看步行、骑行或驾车。'
+      : `百度暂未返回这条${aiEscape(aiModeName(mode))}路线，已保留考点和住宿点；请换一种方式或稍后重试。`,'');
+    return;
+  }
+  pushMsg('ai',`已将正式路线切换为<b>${aiModeName(mode)}</b>，右侧地图和路线规划页面已同步更新。`, '');
 }
 async function aiSearchPoi(category, query){
   const cat = aiCategoryKey(category);
@@ -3669,6 +4145,72 @@ function aiRulePlanFromQuery(q){
 }
 async function runRuleEngine(q){
   const text = String(q || '').trim();
+  const pending = S.aiPending;
+
+  /* 工作流确认优先于范围判断：用户回复“1”“是”本身没有业务关键词，
+     但在候选/确认状态下它们是完整且明确的操作。 */
+  if (pending && pending.type === 'workflow-site-choice'){
+    const index = aiChoiceIndex(text, pending.candidates);
+    const candidate = index >= 0 ? pending.candidates[index] : null;
+    if (!candidate){
+      return `请回复候选考点前面的序号（1-${Math.min(5, pending.candidates.length)}），或直接输入完整校区名称。`;
+    }
+    S.aiPending = null;
+    await aiContinueAfterSite(candidate, geoHint(), {
+      originQuery:pending.originQuery || '',
+      mode:pending.mode || null,
+    });
+    return null;
+  }
+  if (pending && pending.type === 'workflow-origin-choice'){
+    if (aiAffirmative(text)){
+      S.aiPending = null;
+      await aiStartWorkflowPlan();
+      return null;
+    }
+    const order = pending.candidates || [];
+    const index = aiChoiceIndex(text, order);
+    const candidate = index >= 0 ? order[index] : null;
+    if (candidate){
+      S.aiPending = null;
+      await aiContinueAfterOrigin(candidate.bd09, candidate.name, pending.mode || null);
+      return null;
+    }
+    const originQuery = aiExtractRouteRequest(text).originQuery || aiCleanPlace(text);
+    if (originQuery && originQuery.length >= 2){
+      await aiSearchOrigin(originQuery, pending.mode || aiModeKey(text));
+      return null;
+    }
+    if (aiAffirmative(text)){
+      await aiStartWorkflowPlan();
+      return null;
+    }
+    return '请提供酒店、住址或车站名称；也可以回复“开始规划”，查看当前考点附近的住宿候选。';
+  }
+  if (pending && pending.type === 'workflow-facility-confirm'){
+    if (aiAffirmative(text)){
+      await aiStartWorkflowPlan();
+      return null;
+    }
+    if (aiNegative(text)){
+      S.aiPending = null;
+      setAIWorkflow('nearby_ready');
+      switchTab('nearby');
+      return '好的，先保留在周边设施界面；准备好后可以说“开始规划”。';
+    }
+    return '周边设施已经生成。回复“开始规划”进入行程可视化，或回复“先看周边设施”。';
+  }
+  if (pending && pending.type === 'workflow-hotel-choice'){
+    const order = aiWorkflowHotelOrder();
+    const orderIndex = aiChoiceIndex(text, order.map(x=>x.h));
+    const selected = orderIndex >= 0 ? order[orderIndex] : null;
+    if (!selected){
+      return `请回复居住点前面的序号（1-${order.length}），或输入完整居住点名称。`;
+    }
+    await aiSelectWorkflowHotel(selected.i);
+    return null;
+  }
+
   if (!aiScopeOK(text)) return aiOutOfScopeReply();
   if (/清除|取消|删除/.test(text) && /临时|AI|规划/.test(text)){
     clearAIPlan(); return '已清除地图上的临时 AI 规划，前四个界面的正式方案没有变化。';
@@ -3680,17 +4222,48 @@ async function runRuleEngine(q){
       : /路线规划/.test(text) ? 'route' : null;
     if (tab){ switchTab(tab); return `已打开“${tab==='pick'?'考点选择':tab==='nearby'?'周边设施':tab==='trip'?'行程可视化':'路线规划'}”。`; }
   }
-  if (/选择|定位|搜索|查找|规划/.test(text) && /考点|学校|大学|学院|校区/.test(text) && /周边|附近|设施|定位|搜索|查找|选择/.test(text)){
-    await aiSearchSite(aiExtractSiteQuery(text), /周边|附近|设施/.test(text) ? 'nearby' : null);
+  const routeRequest = aiExtractRouteRequest(text);
+  const routeLike = /规划|路线|行程|出行|怎么走|怎么去|从.+到|起点|终点/.test(text);
+  if ((routeLike || routeRequest.originQuery) && (routeRequest.siteQuery || routeRequest.originQuery)){
+    const destinationIsCurrent = routeRequest.siteQuery
+      ? aiCurrentSiteMatches(routeRequest.siteQuery)
+      : true;
+    /* 目的地优先：没有考点，或请求的是另一个考点时，先建考点；
+       不把已有的旧考点误当成用户这次要去的终点。 */
+    if (routeRequest.siteQuery && (!S.siteLocated || !SITE() || !destinationIsCurrent
+        || S.aiWorkflow.stage === 'site_choice')){
+      await aiSearchSite(routeRequest.siteQuery, 'nearby', routeRequest);
+      return null;
+    }
+    if (routeRequest.originQuery && S.nearbyReady && destinationIsCurrent){
+      await aiSearchOrigin(routeRequest.originQuery, routeRequest.mode || S.mode);
+      return null;
+    }
+  }
+  if (/选择|定位|搜索|查找|规划|帮我/.test(text)
+      && /考点|学校|大学|学院|校区/.test(text)
+      && /周边|附近|设施|定位|搜索|查找|选择|路线规划|行程/.test(text)){
+    const siteQuery = aiExtractSiteQuery(text);
+    if (!siteQuery) return '请提供具体的学校、学院或校区名称，我会先检索考点候选，再按流程继续规划。';
+    await aiSearchSite(siteQuery, /周边|附近|设施/.test(text) ? 'nearby' : null, routeRequest);
     return null;
   }
+  if (!S.siteLocated && /规划|定位|搜索|查找/.test(text) && /路线|行程|考点|地址/.test(text)){
+    const siteQuery = aiExtractSiteQuery(text);
+    if (!siteQuery) return '请提供具体考点名称或完整地址，我会先让你确认地点，再生成周边设施和正式路线。';
+    await aiSearchSite(siteQuery, null, routeRequest);
+    return null;
+  }
+  if (routeRequest.originQuery && !S.nearbyReady){
+    return '我先需要知道具体考点。请先说学校或校区名称，例如“帮我规划贵州大学花溪校区”。';
+  }
   if (/开始规划|进入规划|规划住宿|选择住宿/.test(text) && S.nearbyReady){
-    await startPlan();
-    const token = ++aiChoiceId;
-    S.aiPending = {type:'workflow-hotel-choice', token};
-    pushMsg('ai', '已进入行程可视化，请选择居住点。地图将按默认驾车方式显示路线。<div class="acts">' +
-      HOTELS().slice(0,8).map((h,i)=>`<button type="button" class="ai-choice" data-ai-hotel="${i}" data-ai-token="${token}">🏨 ${aiEscape(h.n)}<small>驾车约 ${hotelMin(h,'drive') || '—'} 分钟</small></button>`).join('') +
-      '</div>', '');
+    await aiStartWorkflowPlan();
+    return null;
+  }
+  const mode = aiModeKey(text);
+  if (mode && /切换|改成|优先|路线/.test(text) && S.routeFor && S.planned){
+    await aiSwitchFormalRoute(mode);
     return null;
   }
   /* 普通“附近有什么”优先走服务点查询；只有明确说途径/中途经过才进入组合路线。 */
@@ -3706,7 +4279,6 @@ async function runRuleEngine(q){
     if (url){ await runOfficialLookup({url}); return null; }
     return '请提供完整的官方 HTTPS 地址。若官网允许浏览器读取，我会展示真实摘录及来源；否则只能打开官网由你核对。';
   }
-  const mode = aiModeKey(text);
   if (/规划|途径|中途|经过|组合|混合|[+＋]|换乘|先.*再|早餐店|餐馆|饭馆|打印店|药店|派出所/.test(text)
       || (mode && /路线|切换|改成|给我/.test(text))){
     const spec = aiRulePlanFromQuery(text);
@@ -3841,7 +4413,7 @@ async function sendAI(q){
     S.aiPending = null;
     renderChat();
   }
-  if (S.tab !== 'ai') switchTab('ai');
+  if ($('panel-ai').classList.contains('hidden')) switchTab('ai');
   const display = text || '（图片）';
   pushMsg('me', aiEscape(display), text);
   if ($('aiInput')) $('aiInput').value = '';
@@ -4099,9 +4671,10 @@ async function testSettings(){
       return;
     }
     const data = await res.json();
-    const got = data?.choices?.[0]?.message?.content || '';
+    const got = extractAiReplyText(data);
     if (!got){
-      box.innerHTML = '<div class="testbox err">✕ 接口返回成功，但没有可读取的模型回复<br><span style="opacity:.85">请确认该模型支持 chat/completions。</span></div>';
+      const shape = data && data.choices ? 'choices 存在但没有可读取文本' : '返回结构不是 OpenAI chat/completions 格式';
+      box.innerHTML = `<div class="testbox err">✕ 接口返回成功，但没有可读取的模型回复<br><span style="opacity:.85">${shape}。请检查中转站协议，或选择支持 chat/completions 的模型。</span></div>`;
       return;
     }
     const modelNote = listedIds ? '，已从 /models 核验' : '，该服务未提供 /models，已用实际聊天请求核验';
@@ -4164,7 +4737,8 @@ function applyGate(){
   });
 }
 
-function switchTab(t){
+function switchTab(t, options){
+  const keepAIChat = !!(options && options.keepAIChat && (t === 'nearby' || t === 'trip' || t === 'route'));
   applyGate();
   /* 离开考点选择页 → 关闭选点模式，避免误触重新定位 */
   if (t !== 'pick' && S.mapPickMode){
@@ -4179,12 +4753,13 @@ function switchTab(t){
   }
   if (!gateOK(t)) t = t;          // 允许切过去，但内容是门控占位
   S.tab = t;
-  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===t));
+  if (t !== 'route') clearRouteInfo();
+  document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===(keepAIChat ? 'ai' : t)));
   $('panel-pick').classList.toggle('hidden', t!=='pick');
-  const nb = $('panel-nearby'); if (nb) nb.classList.toggle('hidden', t!=='nearby');
-  const rt = $('panel-route'); if (rt) rt.classList.toggle('hidden', t!=='route');
-  $('panel-trip').classList.toggle('hidden', t!=='trip');
-  $('panel-ai').classList.toggle('hidden', t!=='ai');
+  const nb = $('panel-nearby'); if (nb) nb.classList.toggle('hidden', t!=='nearby' || keepAIChat);
+  const rt = $('panel-route'); if (rt) rt.classList.toggle('hidden', t!=='route' || keepAIChat);
+  $('panel-trip').classList.toggle('hidden', t!=='trip' || keepAIChat);
+  $('panel-ai').classList.toggle('hidden', t!=='ai' && !keepAIChat);
   $('rainPanel').classList.toggle('hidden', !(t==='trip' || t==='route'));
   $('youDot').classList.toggle('hidden', t!=='trip');
   $('alertMark').classList.toggle('hidden', t!=='trip');
@@ -4241,22 +4816,23 @@ document.addEventListener('click', async e=>{
     if (choice === 'workflow-start-plan' || choice === 'workflow-stay-nearby'){
       const pending = S.aiPending;
       if (!pending || pending.type !== 'workflow-facility-confirm' || token !== pending.token) return;
-      S.aiPending = null;
       if (choice === 'workflow-stay-nearby'){
+        S.aiPending = null;
+        setAIWorkflow('nearby_ready');
         switchTab('nearby');
         pushMsg('ai','已保留在周边设施界面。需要继续时可以点击“开始规划”，或直接告诉我“开始规划”。','');
         return;
       }
-      await startPlan();
-      const all = HOTELS();
-      const workflowToken = ++aiChoiceId;
-      S.aiPending = {type:'workflow-hotel-choice', token:workflowToken};
-      const candidates = all.slice(0, 8);
-      pushMsg('ai',`已进入行程可视化，下面按默认驾车时间列出居住点，请选择一个：<div class="acts">${
-        candidates.length ? candidates.map((h,i)=>`<button type="button" class="ai-choice" data-ai-hotel="${i}" data-ai-token="${workflowToken}">
-          🏨 ${aiEscape(h.n)}<small>驾车约 ${hotelMin(h,'drive') || '—'} 分钟 · ${aiEscape(h.a || '地址待核对')}</small></button>`).join('')
-        : '<span class="dim">当前考点暂未生成住宿数据，请先在前四个界面补充检索。</span>'
-      }</div>`, '');
+      await aiStartWorkflowPlan();
+      return;
+    }
+    if (choice === 'workflow-open-route'){
+      const i = Number.isInteger(+S.hotelIdx) ? +S.hotelIdx : -1;
+      if (i < 0 || !S.routeFor){
+        pushMsg('ai','当前还没有可打开的正式路线，请先完成考点和居住点选择。','');
+        return;
+      }
+      await openRoutePlan(i);
       return;
     }
     if (choice === 'confirm-plan'){
@@ -4281,6 +4857,12 @@ document.addEventListener('click', async e=>{
       return;
     }
   }
+  const workflowMode = e.target.closest('[data-ai-workflow-mode]');
+  if (workflowMode){
+    const mode = workflowMode.dataset.aiWorkflowMode;
+    await aiSwitchFormalRoute(mode);
+    return;
+  }
   const aiStop = e.target.closest('[data-ai-stop]');
   if (aiStop){
     const pending = S.aiPending;
@@ -4301,7 +4883,10 @@ document.addEventListener('click', async e=>{
     const c = candidates[+aiSite.dataset.aiSite];
     if (!c) return;
     S.aiPending = null;
-    if (pending.type === 'workflow-site-choice') await aiContinueAfterSite(c, geoHint());
+    if (pending.type === 'workflow-site-choice') await aiContinueAfterSite(c, geoHint(), {
+      originQuery: pending.originQuery || '',
+      mode: pending.mode || null,
+    });
     else {
       setLocatedSite(c.bd09, c.name, pending.openTab === 'nearby' ? geoHint() : '', c.addr || '');
       await beginSearch();
@@ -4310,21 +4895,22 @@ document.addEventListener('click', async e=>{
     }
     return;
   }
+  const aiOrigin = e.target.closest('[data-ai-origin]');
+  if (aiOrigin){
+    const pending = S.aiPending;
+    if (!pending || pending.type !== 'workflow-origin-choice' ||
+        Number(aiOrigin.dataset.aiToken) !== pending.token) return;
+    const candidate = (pending.candidates || [])[Number(aiOrigin.dataset.aiOrigin)];
+    if (!candidate) return;
+    S.aiPending = null;
+    await aiContinueAfterOrigin(candidate.bd09, candidate.name, pending.mode || null);
+    return;
+  }
   const aiHotel = e.target.closest('[data-ai-hotel]');
   if (aiHotel){
     const pending = S.aiPending;
     if (!pending || pending.type !== 'workflow-hotel-choice' || Number(aiHotel.dataset.aiToken) !== pending.token) return;
-    const i = Number(aiHotel.dataset.aiHotel), h = HOTELS()[i];
-    if (!h) return;
-    S.aiPending = null;
-    S.hotelIdx = i;
-    S.mode = 'drive';
-    S.shownRoutes[i] = 'drive';
-    render();
-    await drawChosenRoute(i, 'drive');
-    renderRank(); renderMap();
-    const s = SITE();
-    pushMsg('ai',`已选择 <b>${aiEscape(h.n)}</b>，默认驾车路线已显示在地图上。路线规划：${aiEscape(h.a || '居住点')} → ${aiEscape((S.newSite && S.newSite.name) || (s && s.name) || '考点')}。你也可以直接点击步行、骑行或公交切换比较。`, '');
+    await aiSelectWorkflowHotel(Number(aiHotel.dataset.aiHotel));
     return;
   }
   const chip = e.target.closest('[data-site]');
@@ -5337,7 +5923,7 @@ async function drawChosenRoute(i, kind){
   if (kind === 'walk' && h.route && h.route.path && h.route.path.length > 1){
     KDRMap.drawRoute(h.route.path, conf.color, false);
     showRouteInfo(h, kind, h.route.distance, null);
-    return;
+    return h.route;
   }
 
   /* ①.5 公交：走 KDRMap.transit（TransitRoute 必须传真实 map 实例），
@@ -5364,10 +5950,10 @@ async function drawChosenRoute(i, kind){
       h._live[kind] = { path, distance:t.distance, duration:t.duration, lines:t.lines, mile1 };
       toast('公交方案：' + t.lines.map(l=>l.name).filter(Boolean).join(' → ') +
             (mile1 ? '　+ 下车步行 ' + (numDist(mile1.distance)||'') + 'm 到考点' : ''));
-      return;
+      return {path, distance:t.distance, duration:t.duration};
     }
     toast('未能规划出公共交通方案（这段路可能没有公交/地铁覆盖）');
-    return;
+    return null;
   }
 
   /* ② 否则实时调用百度路线规划 */
@@ -5380,9 +5966,11 @@ async function drawChosenRoute(i, kind){
     /* 缓存下来，下次切回来不用重算 */
     h._live = h._live || {};
     h._live[kind] = { path:r.path, distance:r.distance, duration:r.duration };
+    return r;
   } else {
     /* 算不出就不画 —— 不给假线 */
     toast('未能规划出' + (conf.label||'') + '路线（该方式在真实路网下不可达）');
+    return null;
   }
 }
 
@@ -5419,6 +6007,36 @@ function showRouteInfo(h, kind, dist, dur){
   el.style.display = 'flex';
   const cl = $('riClose');
   if (cl) cl.onclick = ()=>{ el.style.display='none'; if (KDRMap.clearRoutes) KDRMap.clearRoutes(); };
+}
+
+function clearRouteInfo(){
+  const el = $('routeInfo');
+  if (el){
+    el.innerHTML = '';
+    el.style.display = 'none';
+  }
+}
+
+/* 路线页的信息条只认当前正式路线，避免从行程可视化切换进来时
+   残留上一家住宿或上一种出行方式的摘要。 */
+function syncFormalRouteInfo(){
+  if (S.tab !== 'route' || !S.routeFor){
+    clearRouteInfo();
+    return;
+  }
+  const kind = S.routeMode || S.mode || 'walk';
+  const result = kind === 'metro'
+    ? S.transit
+    : (S.corridor && S.corridor[kind]);
+  if (!result || result.distance == null){
+    clearRouteInfo();
+    return;
+  }
+  const origin = S.routeFor.origin || {};
+  showRouteInfo({
+    name: origin.name || '已选住宿',
+    gate: '',
+  }, kind, result.distance, result.duration);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -5803,6 +6421,7 @@ function renderRoutePlan(){
   const r = (k === 'metro') ? S.transit : (S.corridor && S.corridor[k]);
 
   if (!r){
+    clearRouteInfo();
     if (k === 'metro'){
       if (sum) sum.innerHTML = `
         <div class="rp-empty">
@@ -5827,6 +6446,7 @@ function renderRoutePlan(){
       else { S.corridor = S.corridor || {}; delete S.corridor[k]; await ensureCorridor(k); }
       await ensureAlong(k);
       renderRoutePlan(); renderMap();
+      syncFormalRouteInfo();
     };
     return;
   }
@@ -5964,8 +6584,11 @@ function renderRouteSteps(k, r){
   if (!steps.length)
     return '<div class="rp-empty">百度这次没返回分步指引，可参考地图上画出的路线。</div>';
 
-  /* 百度只给了里程、没给文字（驾车就是这样）→ 用几何推算转向 */
+  /* 百度只给了里程、没给文字（驾车就是这样）→ 用几何推算转向。
+     路线页打开时会按需用同一条路线的分段点逆地理编码补道路名；
+     道路名是真实返回值，转向仍明确标为几何推算。 */
   const withText = steps.some(x=>x.desc);
+  const needsFallback = steps.some(x=>!x.desc);
   const dirs = steps.map((x,i)=>{
     const a = x.pt, b = (steps[i+1] || {}).pt;
     return (a && b) ? bearingDeg(a, b) : null;
@@ -5973,22 +6596,34 @@ function renderRouteSteps(k, r){
 
   const LIMIT = 40;
   const head = steps.slice(0, LIMIT).map((x,i)=>{
-    const dist = x.dist ? `<span class="dim">${x.dist}</span>` : '';
+    const dist = x.dist ? `<span class="dim">${aiEscape(x.dist)}</span>` : '';
     if (withText && x.desc)
       return `<div class="rp-step"><span class="rp-sn">${i+1}</span>
-        <span>${x.desc}${x.dist?` <span class="dim">(${x.dist})</span>`:''}</span></div>`;
+        <span>${aiEscape(x.desc)}${x.dist?` <span class="dim">(${aiEscape(x.dist)})</span>`:''}</span></div>`;
     /* 几何推算：第 1 段是出发，之后看方位角变化 */
     const turn = (i === 0) ? '出发'
                : (dirs[i] != null && dirs[i-1] != null) ? turnWord(dirs[i] - dirs[i-1])
                : '继续前行';
+    const prevRoad = i > 0 ? String(steps[i-1].road || '').trim() : '';
+    const roadName = String(x.road || '').trim();
+    const road = roadName ? `　<span class="road">${aiEscape(roadName)}</span>` : '';
+    const action = roadName
+      ? (i === 0
+          ? `出发，沿 ${aiEscape(roadName)} 行驶`
+          : (prevRoad && prevRoad !== roadName
+              ? `${turn}进入 ${aiEscape(roadName)}`
+              : `${turn}，沿 ${aiEscape(roadName)} 继续行驶`))
+      : aiEscape(turn);
     return `<div class="rp-step"><span class="rp-sn">${i+1}</span>
-      <span><b>${turn}</b>${dist?`　${dist}`:''}</span></div>`;
+      <span><b>${action}</b>${roadName ? '' : road}${dist?`　${dist}`:''}</span></div>`;
   }).join('');
   const more = steps.length > LIMIT
     ? `<div class="rp-more">…共 ${steps.length} 段，已显示前 ${LIMIT} 段</div>` : '';
-  const note = withText ? ''
-    : `<div class="rp-more">ℹ️ 百度对驾车路线只返回里程、不返回文字指引，
-        这里的转向是<b>按路线几何推算</b>的（右转/左转以行进方向为准）。</div>`;
+  const hasRoad = steps.some(x=>x.road);
+  const note = !needsFallback ? ''
+    : `<div class="rp-more">ℹ️ 百度未返回完整驾车文字指引，
+        ${hasRoad ? '道路名称来自百度分段点逆地理编码，转向仍为<b>按路线几何推算</b>。'
+                  : '这里的转向是<b>按路线几何推算</b>的（右转/左转以行进方向为准）；部分路段暂未返回道路名。'}</div>`;
   return head + more + note;
 }
 /* 按需计算某方式的沿途明细（缓存，不重复算） */
@@ -6179,6 +6814,13 @@ async function beginSearch(){
   if (S.pendingSite){
     const p = S.pendingSite; S.pendingSite = null;
     setLocatedSite(p.pt, p.name || '地图选点', '', '');
+  }
+  /* 空状态不能继续进入周边设施：否则后续渲染会读取空考点对象。 */
+  if (!S.siteLocated && !usingCase()){
+    setStatus('⚠️ 请先输入考点名称并点击「📍 定位考点」，或使用「🗺 地图选点」。');
+    toast('请先定位考点');
+    switchTab('pick');
+    return;
   }
   /* 什么都没定位 → 用内置案例（它就是完整数据） */
   if (usingCase() && !S.siteLocated){
@@ -6512,7 +7154,7 @@ function akResult(html, cls){
 /* 检测 AK 是否可用（直接问百度 JSAPI 的鉴权接口） */
 
 /* 从「行程可视化」的某家住宿进入路线规划 */
-async function openRoutePlan(i){
+async function openRoutePlan(i, options){
   const s2 = SITE(); if (!s2) return;
   const h = (s2.hotels||[])[i]; if (!h || !h.bd09) return;
   const c = curCenter(); if (!c) return;
@@ -6523,20 +7165,28 @@ async function openRoutePlan(i){
   S.alongCache = null;
   S.rpFocus    = null;               // 换住宿就取消上一次的服务点放大
   S.transit    = null;               // 起终点变了，公交方案要重算
+  clearRouteInfo();
 
   showProgress('正在规划到考点的路线…');
   await buildCorridors(h.bd09);
   hideProgress();
 
-  S.planned = true;
-  switchTab('route');
+  if (S.routeMode === 'drive' && S.corridor && S.corridor.drive &&
+      KDRMap.enrichDrivingRoute){
+    showProgress('正在补充驾车路段道路名称…');
+    S.corridor.drive = await KDRMap.enrichDrivingRoute(S.corridor.drive).catch(()=>S.corridor.drive);
+    hideProgress();
+  }
+  S.planned = !!(S.corridor && Object.keys(S.corridor).length);
+  switchTab('route', options);
   /* ★ 先把面板渲染出来（概要 + 逐段走法都有了），
      沿途配套的核验要逐点算路，可能要十几秒 —— 不能让整页干等着，
      否则用户看到的是一个空白面板。 */
-  renderRoutePlan(); renderMap();
+  renderRoutePlan(); renderMap(); renderLegend();
   if (S.routeMode === 'metro') await buildTransit();     // 公交按需生成（含下车步行接驳）
   await ensureAlong(S.routeMode);
-  renderRoutePlan(); renderMap(); renderRain(S.rainPct);
+  renderRoutePlan(); renderMap(); renderLegend(); renderRain(S.rainPct);
+  syncFormalRouteInfo();
   toast('已生成「' + h.name + '」到考点的路线');
 }
 
@@ -6800,6 +7450,7 @@ async function startPlan(){
   S.transitErr = null;
   if (!S.nearbyReady){ toast('请先在「考点选择」里定位考点'); switchTab('pick'); return; }
   S.nearbyMode = false;
+  let routeOk = true;
 
   /* 有居住点 → 生成三条「路线管道」；否则用等时圈 */
   if (S.origin && S.origin.pt){
@@ -6812,13 +7463,15 @@ async function startPlan(){
     };
     S.routeMode = S.mode || 'walk';
     showProgress('正在规划路线与管道…');
-    const ok = await buildCorridors();
+    routeOk = await buildCorridors();
     /* 用户明确选择公共交通时，开始规划阶段就要把公交结果算出来；
        无方案时左侧直接显示“暂无公共交通推荐”，不再伪造住宿卡。 */
     if (S.mode === 'metro') await buildTransit();
-    if (!ok) toast('路线规划失败，请检查起终点是否可达');
+    if (!routeOk) toast('路线规划失败，请检查起终点是否可达');
   }
-  S.planned = true;                 // 解除行程可视化的门控
+  /* 有居住点时，只有至少一条真实路线成功才解除行程门控；
+     没有居住点时仍允许进入行程页选择住宿。 */
+  S.planned = S.origin && S.origin.pt ? !!routeOk : true;
   switchTab('trip');
   renderRank();                     // ★ 路线已生成，重渲染住宿卡以显示距离
   syncRealMap();
@@ -7099,6 +7752,7 @@ function renderCruiseUI(){
     }
     await ensureAlong(S.routeMode);
     renderRoutePlan(); renderMap(); renderRain(S.rainPct);
+    syncFormalRouteInfo();
   };
 
   /* 就近便利度：点某一行 → 地图放大到那家店；再点「取消放大」回到全景 */
