@@ -1099,12 +1099,22 @@ select.input{cursor:pointer}
             <option value="custom">自定义 Base URL</option>
           </select>
           <input class="input" id="fBase" placeholder="https://api.deepseek.com/v1">
-          <div class="desc">OpenAI 兼容格式。填到 <code>/v1</code> 为止，不要带 <code>/chat/completions</code>。<b>不要用 file:// 双击页面测试模型</b>，部分服务商会拒绝这种来源。</div>
+          <div class="desc">请填写接口根地址，不要带 <code>/models</code>、<code>/chat/completions</code> 或完整模型路径。浏览器直连建议使用 localhost 或 HTTPS，不要用 <code>file://</code> 双击页面测试。</div>
+        </div>
+        <div class="field">
+          <label>接口风格</label>
+          <select class="input" id="fStyle">
+            <option value="openai">OpenAI 兼容（/models + /chat/completions）</option>
+            <option value="anthropic">Anthropic（/v1/models + /v1/messages）</option>
+            <option value="gemini">Google Gemini（v1beta）</option>
+            <option value="ollama">Ollama 原生（/api/tags + /api/chat）</option>
+          </select>
+          <div class="desc">云端中转站通常选择 OpenAI 兼容；Ollama、LM Studio、vLLM 等本地服务按实际接口选择。API Key 可留空，服务端需要鉴权时再填写。</div>
         </div>
         <div class="field">
           <label>API Key</label>
           <input class="input" id="fKey" type="password" placeholder="sk-…">
-        <div class="desc">🔒 只保存在当前浏览器会话，不写入永久存储。关闭页面或清除会话后删除，不会上传到本作品服务器。</div>
+          <div class="desc">🔒 只保存在当前浏览器会话，不写入永久存储。关闭页面或清除会话后删除，不会上传到本作品服务器。</div>
         </div>
         <div class="field">
           <label>模型名</label>
@@ -1115,7 +1125,7 @@ select.input{cursor:pointer}
               <option value="">先检索模型列表</option>
             </select>
           </div>
-          <div class="desc">模型名必须填写服务商接口返回的实际 <code>id</code>，不是中文产品名。自动检索失败时可按服务商文档手动填写。</div>
+          <div class="desc">可以先自动检索并点击列表选择模型，也可以直接手动填写模型 ID。模型列表检索失败时仍可直接测试聊天接口。</div>
         </div>
       </div>
 
@@ -2836,19 +2846,20 @@ function renderRain(pct){
    按需求去掉内置默认通道：评委/测试者自己填 API 即可，
    项目不承担任何模型费用，也不存在内置 Key 泄露问题。 */
 function activeChannel(){
-  return { base:S.api.base, key:S.api.key, model:S.api.model, kind:'byok' };
+  return { base:S.api.base, key:S.api.key, model:S.api.model, style:aiStyle(S.api.style), kind:'byok' };
 }
 function aiConfigured(){
   const c = activeChannel();
-  return !!(c.base && c.key && c.model);
+  return !!(c.base && c.model);
 }
 
 /* 把当前界面状态与「已算好的数据」压成上下文。
    原则：AI 只翻译与解读，所有数字由此处提供，它不许自己算。*/
 function buildContext(){
   const sn = snapSite(), sp = spot(), list = sortedHotels();
+  const current = sn || site();
   const best = list[0], w = best ? best.t.walk : 15;
-  const dep = sliderToMin(S.rainPct);
+  const dep = sliderToMin(S.rainPct == null ? 0 : S.rainPct);
   const wi = wetInfo(dep);
 
   /* 服务点：按类别统计并取最近的几个，供 AI 做「综合路线推荐」 */
@@ -2872,9 +2883,9 @@ function buildContext(){
   const routeMode = S.tab === 'route' ? (S.routeMode || S.mode) : S.mode;
   const routeMinutes = S.tab === 'route' ? currentCommuteMinutes() : null;
   return {
-    考点: sn ? sn.name : site().name,
-    考场楼栋: sp.n,
-    指定入口: sp.g || '—',
+    考点: current ? current.name : '尚未确定考点',
+    考场楼栋: sp && sp.n ? sp.n : '尚未确定',
+    指定入口: sp && sp.g ? sp.g : '—',
     开考时间: fmtTime(examStart()),
     考试名称: exam().name,
     出行偏好: MODE_LABEL[S.mode],
@@ -2913,6 +2924,15 @@ const INTENT_ACTIONS = [
 
 function buildMessages(q, image){
   const ctx = buildContext();
+  /* sendAI 会先把当前问题写入右侧聊天记录，再调用模型。
+     当前问题下面会单独追加一次，因此这里只携带此前的历史消息，
+     避免首轮请求把同一条用户消息发送两遍。 */
+  let history = chat;
+  /* 模型请求期间还会插入一条没有 text 的 loading 消息。 */
+  if (history.length && history[history.length - 1].role === 'ai' &&
+      !history[history.length - 1].text) history = history.slice(0, -1);
+  if (history.length && history[history.length - 1].role === 'me')
+    history = history.slice(0, -1);
   const userContent = image
     ? [
         { type:'text', text:q || '请识别这张图片中与考试考点和出行有关的信息，并先列出识别结果，不要直接修改当前考点。' },
@@ -2953,7 +2973,7 @@ ${INTENT_ACTIONS.join(' / ')}
 动作示例：
 <actions>[{"name":"select_mode","args":{"mode":"drive"}},{"name":"show_rain_simulation","args":{}}]</actions>
 如果需要用户选择或确认，使用 ask_user，不要擅自执行关键变更。` },
-    ...chat.slice(-6).filter(m=>m.text).map(m=>({ role: m.role==='me'?'user':'assistant', content:m.text })),
+    ...history.slice(-6).filter(m=>m.text).map(m=>({ role: m.role==='me'?'user':'assistant', content:m.text })),
     { role:'user', content:userContent }
   ];
 }
@@ -2993,7 +3013,14 @@ function aiTextPart(value){
   }
   return '';
 }
-function extractAiReplyText(data){
+function extractAiReplyText(data, style){
+  if (style === 'anthropic')
+    return ((data && data.content) || []).map(part=>part.text || '').join('').trim();
+  if (style === 'gemini')
+    return (((data && data.candidates && data.candidates[0]) || {}).content?.parts || [])
+      .map(part=>part.text || '').join('').trim();
+  if (style === 'ollama')
+    return String(data && data.message && data.message.content || '').trim();
   const choice = data && Array.isArray(data.choices) ? data.choices[0] : null;
   const message = choice && choice.message;
   const direct = aiTextPart(message && message.content) || aiTextPart(choice && choice.text);
@@ -3009,34 +3036,9 @@ function extractAiReplyText(data){
 /* 真实调用。返回 {text, actions, imageSite} */
 async function callModel(q, image){
   const c = activeChannel();
-  if (!c.base || !c.key || !c.model) throw new Error('NO_CHANNEL');
-
-  const url = aiEndpoint(c.base, '/chat/completions');
-  const ctrl = new AbortController();
-  const timer = setTimeout(()=>ctrl.abort(), 30000);
-
-  let res;
-  try {
-    res = await fetch(url, {
-      method:'POST',
-      headers: aiHeaders(c.key),
-      body: JSON.stringify(aiRequestBody(c.model, buildMessages(q, image), {temperature:0.3, max_tokens:600})),
-      signal: ctrl.signal,
-    });
-  } catch(e){
-    clearTimeout(timer);
-    throw new Error(formatAiNetworkError(e));
-  }
-  clearTimeout(timer);
-
-  if (!res.ok){
-    const body = await res.text().catch(()=> '');
-    const err = new Error('HTTP_' + res.status);
-    err.detail = body.slice(0, 300);
-    throw err;
-  }
-  const data = await res.json();
-  const raw = extractAiReplyText(data);
+  if (!c.base || !c.model) throw new Error('NO_CHANNEL');
+  const result = await aiChat(c, buildMessages(q, image), 1200, 60000);
+  const raw = extractAiReplyText(result.data, c.style);
   if (!raw) throw new Error('EMPTY');
 
   const actions = parseModelActions(raw);
@@ -3050,7 +3052,7 @@ async function callModel(q, image){
 /* 错误 → 中文诊断 */
 function diagnose(err){
   const M = {
-    NO_CHANNEL:'还没有配置模型。点右上角 ⚙ 填入 Base URL / API Key / 模型名。',
+    NO_CHANNEL:'还没有配置模型。点右上角 ⚙ 填入 Base URL / 模型名；API Key 按服务商要求填写。',
     TIMEOUT:'模型 30 秒没响应，可能网络慢或服务商排队。',
     NETWORK:'连不上这个地址。检查 Base URL 是否写错，或该服务商是否允许浏览器直连。',
     EMPTY:'模型返回了空内容，换个模型名试试。',
@@ -3061,6 +3063,7 @@ function diagnose(err){
     HTTP_404:'端点或模型名不存在。检查 Base URL 是否漏了 /v1 之类的路径。',
     HTTP_429:'请求太频繁或额度用尽，稍后再试。',
     HTTP_500:'服务商内部错误，稍后重试。',
+    BAD_JSON:'接口返回的不是 JSON，可能填入了网页地址、反向代理错误页或不匹配的接口风格。',
     MODELS_EMPTY:'接口返回成功，但没有可用模型 id。请按服务商文档手动填写模型名。',
   };
   if (M[err.message]) return M[err.message];
@@ -4687,50 +4690,219 @@ function bindChatActions(){
 }
 
 /* ══ 设置 ══ */
-/* 常用 OpenAI 兼容接口预设。预设不代表 Key 一定有权限，实际模型以 /models 返回为准。 */
+/* 常用接口预设。预设不代表 Key 一定有权限，实际模型以服务商响应为准。 */
 const PRESETS = {
-  deepseek:{base:'https://api.deepseek.com',                          model:'deepseek-chat'},
-  zhipu:   {base:'https://open.bigmodel.cn/api/paas/v4',              model:'glm-4-flash'},
-  qwen:    {base:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-plus'},
-  doubao:  {base:'https://ark.cn-beijing.volces.com/api/v3',          model:'doubao-pro-32k'},
-  kimi:    {base:'https://api.moonshot.cn/v1',                        model:'moonshot-v1-8k'},
-  silicon: {base:'https://api.siliconflow.cn/v1',                     model:'Qwen/Qwen2.5-7B-Instruct'},
-  custom:  {base:'', model:''},
+  deepseek:{base:'https://api.deepseek.com/v1',                       model:'deepseek-chat', style:'openai'},
+  zhipu:   {base:'https://open.bigmodel.cn/api/paas/v4',              model:'glm-4-flash', style:'openai'},
+  qwen:    {base:'https://dashscope.aliyuncs.com/compatible-mode/v1', model:'qwen-plus', style:'openai'},
+  doubao:  {base:'https://ark.cn-beijing.volces.com/api/v3',          model:'doubao-pro-32k', style:'openai'},
+  kimi:    {base:'https://api.moonshot.cn/v1',                        model:'moonshot-v1-8k', style:'openai'},
+  silicon: {base:'https://api.siliconflow.cn/v1',                     model:'Qwen/Qwen2.5-7B-Instruct', style:'openai'},
+  custom:  {base:'', model:'', style:'openai'},
 };
+const AI_STYLES = ['openai','anthropic','gemini','ollama'];
+function aiStyle(value){
+  return AI_STYLES.includes(value) ? value : 'openai';
+}
 function normalizeAiBase(raw){
   let value = String(raw || '').trim().replace(/\/+$/,'');
   if (!value) return '';
+  if (/^https:\/\/api\.deepseek\.com$/i.test(value)) value += '/v1';
   return value.replace(/\/chat\/completions$/i,'').replace(/\/models$/i,'').replace(/\/+$/,'');
 }
-function aiEndpoint(base, path){
-  const root = normalizeAiBase(base);
-  return root ? root + (String(path || '').startsWith('/') ? path : '/' + path) : '';
-}
-function aiRequestBody(model, messages, options){
-  const opts = options || {};
-  return { model, messages,
-    temperature: opts.temperature == null ? 0.3 : opts.temperature,
-    max_tokens: opts.max_tokens == null ? 600 : opts.max_tokens };
-}
-function aiHeaders(key){
-  return {'Content-Type':'application/json','Authorization':'Bearer '+key};
+function normalizeAiStyleBase(style, raw){
+  let value = normalizeAiBase(raw);
+  if (!value) return '';
+  /* 参考工具对 Anthropic / Gemini / Ollama 使用服务根地址，再拼各自路径。
+     用户若照 OpenAI 习惯填了末尾 /v1，也要避免生成 /v1/v1/...。 */
+  if (style === 'anthropic' || style === 'gemini' || style === 'ollama')
+    value = value.replace(/\/v1(?:beta)?$/i,'');
+  return value.replace(/\/+$/,'');
 }
 function formatAiNetworkError(err){ return err && err.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK'; }
-function extractAiModelIds(data){
-  const rows = Array.isArray(data && data.data) ? data.data : [];
-  return [...new Set(rows.map(x=>typeof x === 'string' ? x : x && x.id)
+function aiJsonHeaders(extra){
+  return Object.assign({'Content-Type':'application/json'}, extra || {});
+}
+function aiAuthHeaders(style, key){
+  if (style === 'anthropic'){
+    return aiJsonHeaders({
+      'x-api-key': key || '',
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-direct-browser-access':'true',
+    });
+  }
+  if (style === 'gemini'){
+    return aiJsonHeaders(key ? {'x-goog-api-key':key} : {});
+  }
+  if (style === 'ollama') return aiJsonHeaders();
+  const headers = aiJsonHeaders();
+  if (key) headers.Authorization = 'Bearer ' + key;
+  return headers;
+}
+function aiModelRequest(style, base, key){
+  style = aiStyle(style);
+  const root = normalizeAiStyleBase(style, base);
+  if (style === 'anthropic'){
+    return {url:root + '/v1/models', headers:aiAuthHeaders(style, key)};
+  }
+  if (style === 'gemini'){
+    return {url:root + '/v1beta/models?pageSize=100', headers:aiAuthHeaders(style, key)};
+  }
+  if (style === 'ollama'){
+    return {url:root + '/api/tags', headers:aiAuthHeaders(style, key)};
+  }
+  return {url:root + '/models', headers:aiAuthHeaders(style, key)};
+}
+function aiDataUrl(raw){
+  const m = String(raw || '').match(/^data:([^;,]+);base64,(.+)$/);
+  return m ? {mime:m[1], data:m[2]} : null;
+}
+function aiAnthropicContent(content){
+  if (!Array.isArray(content)) return content;
+  return content.map(part=>{
+    if (part && part.type === 'text') return {type:'text', text:String(part.text || '')};
+    const image = aiDataUrl(part && part.image_url && part.image_url.url);
+    return image ? {
+      type:'image',
+      source:{type:'base64', media_type:image.mime, data:image.data},
+    } : null;
+  }).filter(Boolean);
+}
+function aiGeminiParts(content){
+  const list = Array.isArray(content) ? content : [{type:'text', text:String(content || '')}];
+  return list.map(part=>{
+    if (part && part.type === 'text') return {text:String(part.text || '')};
+    const image = aiDataUrl(part && part.image_url && part.image_url.url);
+    return image ? {inlineData:{mimeType:image.mime, data:image.data}} : null;
+  }).filter(Boolean);
+}
+function aiChatRequest(style, base, key, model, messages, maxTokens, options){
+  style = aiStyle(style);
+  const opts = options || {}, root = normalizeAiStyleBase(style, base);
+  if (style === 'anthropic'){
+    const system = messages.find(m=>m.role === 'system');
+    const body = {
+      model,
+      max_tokens:maxTokens,
+      messages:messages.filter(m=>m.role !== 'system').map(m=>({
+        role:m.role === 'assistant' ? 'assistant' : 'user',
+        content:aiAnthropicContent(m.content),
+      })),
+    };
+    if (system) body.system = typeof system.content === 'string' ? system.content : aiAnthropicContent(system.content);
+    if (opts.temperature != null) body.temperature = opts.temperature;
+    return {url:root + '/v1/messages', headers:aiAuthHeaders(style, key), body};
+  }
+  if (style === 'gemini'){
+    const system = messages.find(m=>m.role === 'system');
+    const body = {
+      contents:messages.filter(m=>m.role !== 'system').map(m=>({
+        role:m.role === 'assistant' ? 'model' : 'user',
+        parts:aiGeminiParts(m.content),
+      })),
+      generationConfig:{
+        maxOutputTokens:maxTokens,
+        ...(opts.temperature == null ? {} : {temperature:opts.temperature}),
+      },
+    };
+    if (system) body.systemInstruction = {parts:aiGeminiParts(system.content)};
+    return {
+      url:root + '/v1beta/models/' + encodeURIComponent(model) + ':generateContent',
+      headers:aiAuthHeaders(style, key), body,
+    };
+  }
+  if (style === 'ollama'){
+    return {
+      url:root + '/api/chat',
+      headers:aiAuthHeaders(style, key),
+      body:{
+        model,
+        messages,
+        stream:false,
+        options:opts.temperature == null ? {num_predict:maxTokens}
+          : {temperature:opts.temperature, num_predict:maxTokens},
+      },
+    };
+  }
+  const body = {
+    model, messages, stream:false,
+    ...(opts.temperature == null ? {} : {temperature:opts.temperature}),
+  };
+  if (opts.tokenParam === 'max_completion_tokens') body.max_completion_tokens = maxTokens;
+  else body.max_tokens = maxTokens;
+  return {url:root + '/chat/completions', headers:aiAuthHeaders(style, key), body};
+}
+async function aiChat(channel, messages, maxTokens, timeoutMs, options){
+  const style = aiStyle(channel.style), opts = options || {};
+  let tokenParam = 'max_tokens';
+  let retried = false;
+  for (;;){
+    const req = aiChatRequest(style, channel.base, channel.key, channel.model, messages,
+      maxTokens, Object.assign({}, opts, {tokenParam}));
+    const ctrl = new AbortController();
+    const timer = setTimeout(()=>ctrl.abort('timeout'), timeoutMs || 30000);
+    const t0 = performance.now();
+    let res, text;
+    try{
+      res = await fetch(req.url, {
+        method:'POST', headers:req.headers, body:JSON.stringify(req.body), signal:ctrl.signal,
+      });
+      text = await res.text().catch(()=> '');
+    }catch(err){
+      clearTimeout(timer);
+      throw new Error(formatAiNetworkError(err));
+    }
+    clearTimeout(timer);
+    const ms = Math.round(performance.now() - t0);
+    if (!res.ok && style === 'openai' && !retried &&
+        /max_completion_tokens|max_tokens/i.test(text || '')){
+      tokenParam = 'max_completion_tokens';
+      retried = true;
+      continue;
+    }
+    let data = null;
+    try{ data = text ? JSON.parse(text) : null; }
+    catch(e){
+      const err = new Error('BAD_JSON'); err.detail = text.slice(0,300); throw err;
+    }
+    if (!res.ok){
+      const err = new Error('HTTP_' + res.status);
+      err.detail = text.slice(0,300);
+      throw err;
+    }
+    return {res, data, text, ms, req, retried};
+  }
+}
+function extractAiModelIds(style, data){
+  if (!data) return [];
+  if (style === 'gemini'){
+    return [...new Set((data.models || []).map(m=>({
+      id:String(m.name || '').replace(/^models\//,''),
+      chat:(m.supportedGenerationMethods || []).includes('generateContent'),
+    })).filter(m=>m.id && m.chat !== false).map(m=>m.id))];
+  }
+  if (style === 'ollama'){
+    return [...new Set((data.models || []).map(m=>m.name || m.model).filter(Boolean))];
+  }
+  return [...new Set((Array.isArray(data.data) ? data.data : []).map(x=>typeof x === 'string' ? x : x && (x.id || x.name))
     .filter(x=>typeof x === 'string' && x.trim()).map(x=>x.trim()))];
 }
-async function fetchAiModels(base, key){
-  const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort(), 20000);
+async function fetchAiModels(style, base, key){
+  const req = aiModelRequest(aiStyle(style), base, key);
+  const ctrl = new AbortController(), timer = setTimeout(()=>ctrl.abort('timeout'), 20000);
   try{
-    const res = await fetch(aiEndpoint(base, '/models'), {method:'GET', headers:{'Authorization':'Bearer '+key}, signal:ctrl.signal});
-    if (!res.ok){ const err = new Error('HTTP_'+res.status); err.detail = (await res.text().catch(()=> '')).slice(0,300); throw err; }
-    const ids = extractAiModelIds(await res.json());
+    const res = await fetch(req.url, {method:'GET', headers:req.headers, signal:ctrl.signal});
+    const text = await res.text().catch(()=> '');
+    if (!res.ok){ const err = new Error('HTTP_'+res.status); err.detail = text.slice(0,300); throw err; }
+    let data = null;
+    try{ data = text ? JSON.parse(text) : null; }catch(e){
+      const err = new Error('BAD_JSON'); err.detail = text.slice(0,300); throw err;
+    }
+    const ids = extractAiModelIds(aiStyle(style), data);
     if (!ids.length) throw new Error('MODELS_EMPTY');
     return ids;
   }catch(e){
-    if (e.message === 'MODELS_EMPTY' || e.message.startsWith('HTTP_')) throw e;
+    if (e.message === 'MODELS_EMPTY' || e.message.startsWith('HTTP_') || e.message === 'BAD_JSON') throw e;
     throw new Error(formatAiNetworkError(e));
   }finally{ clearTimeout(timer); }
 }
@@ -4748,12 +4920,14 @@ function matchedPreset(base){
   return Object.keys(PRESETS).find(k=>k !== 'custom' && normalizeAiBase(PRESETS[k].base) === normalized) || 'custom';
 }
 async function discoverModels(){
-  const box = $('testResult'), base = normalizeAiBase($('fBase').value), key = $('fKey').value.trim();
-  if (!base || !key){ box.innerHTML = '<div class="testbox err">✕ 请先填写 Base URL 和 API Key</div>'; return; }
+  const box = $('testResult'), style = aiStyle($('fStyle').value);
+  const base = normalizeAiBase($('fBase').value), key = $('fKey').value.trim();
+  if (!base){ box.innerHTML = '<div class="testbox err">✕ 请先填写 Base URL</div>'; return; }
   $('fBase').value = base;
-  box.innerHTML = `<div class="testbox run">⏳ 正在读取 ${aiEscape(base)}/models …</div>`;
+  const req = aiModelRequest(style, base, key);
+  box.innerHTML = `<div class="testbox run">⏳ 正在读取 ${aiEscape(req.url)} …</div>`;
   try{
-    const ids = await fetchAiModels(base, key), select = $('fModelSelect');
+    const ids = await fetchAiModels(style, base, key), select = $('fModelSelect');
     select.innerHTML = '<option value="">选择一个模型</option>' + ids.map(id=>`<option value="${aiEscape(id)}">${aiEscape(id)}</option>`).join('');
     const current = $('fModel').value.trim();
     if (current && ids.includes(current)) select.value = current;
@@ -4761,7 +4935,7 @@ async function discoverModels(){
     box.innerHTML = `<div class="testbox ok">✓ 已检索到 ${ids.length} 个可用模型<br><span style="opacity:.85">当前模型：<b>${aiEscape($('fModel').value)}</b>。现在可以进行连通性测试。</span></div>`;
   }catch(err){
     resetModelSelect('检索失败，请按文档手动填写模型名');
-    box.innerHTML = `<div class="testbox err">✕ 未能读取模型列表<br><span style="opacity:.85">${diagnose(err)}${err.message === 'HTTP_404' ? '<br>该服务商可能不提供 /models，但仍可手动填写模型名后测试。' : ''}</span></div>`;
+    box.innerHTML = `<div class="testbox err">✕ 未能读取模型列表<br><span style="opacity:.85">${diagnose(err)}<br>模型列表只是辅助功能；如果你知道模型 ID，仍可直接进行连通性测试。</span></div>`;
   }
 }
 function openSettings(){
@@ -4772,88 +4946,59 @@ function openSettings(){
   $('fBase').value  = a.base  || '';
   $('fKey').value   = a.key   || '';
   $('fModel').value = a.model || '';
-  setPresetSelection(matchedPreset(a.base));
+  const preset = matchedPreset(a.base);
+  $('fStyle').value = aiStyle(a.style || (PRESETS[preset] && PRESETS[preset].style));
+  setPresetSelection(preset);
   resetModelSelect('先检索模型列表');
   $('modeDesc').innerHTML = '浏览器<b style="color:#8FD3FF">直连</b>你填的服务商，' +
-    'Key 只存在当前浏览器会话，不写入永久存储，也不经过本作品服务端。<b>本项目不内置任何 Key。</b>';
+    'Key 只存在当前浏览器会话，不写入永久存储，也不经过本作品服务端。<b>模型列表失败时仍可直接测试聊天接口。</b>';
   $('testResult').innerHTML = location.protocol === 'file:'
     ? '<div class="testbox err">当前页面通过 file:// 打开。模型服务商可能拒绝 Origin: null，建议先用 http://localhost 或 HTTPS 打开后再测试。</div>' : '';
 }
 function closeSettings(){ $('settingsMask').classList.add('hidden'); }
 
 function saveSettings(){
-  const base = $('fBase').value.trim(), key = $('fKey').value.trim(), model = $('fModel').value.trim();
-  if (!base || !key || !model){ toast('请填完 Base URL / API Key / 模型名'); return; }
-  S.api = { mode:'byok', base:normalizeAiBase(base), key, model };
+  const base = $('fBase').value.trim(), key = $('fKey').value.trim();
+  const model = $('fModel').value.trim(), style = aiStyle($('fStyle').value);
+  if (!base || !model){ toast('请填完 Base URL / 模型名；API Key 按服务商要求填写'); return; }
+  S.api = { mode:'byok', style, base:normalizeAiBase(base), key, model };
   sessionStore.set('api', S.api);
   closeSettings();
   render();
   toast('已保存，AI 辅助出行已接入你的模型');
 }
 
-/* 真实连通性测试：先读取模型列表，再用与正式聊天相同的请求结构验证模型响应。 */
+/* 真实连通性测试：直接请求聊天接口；模型列表只是辅助，不阻断测试。 */
 async function testSettings(){
-  const box = $('testResult');
-  const base = normalizeAiBase($('fBase').value), key = $('fKey').value.trim(), model = $('fModel').value.trim();
-  if (!base || !key || !model){
-    box.innerHTML = `<div class="testbox err">✕ 请先填完 Base URL / API Key / 模型名</div>`; return;
+  const box = $('testResult'), style = aiStyle($('fStyle').value);
+  const base = normalizeAiBase($('fBase').value), key = $('fKey').value.trim();
+  const model = $('fModel').value.trim() || $('fModelSelect').value.trim();
+  if (!base || !model){
+    box.innerHTML = `<div class="testbox err">✕ 请先填写 Base URL 和模型名；API Key 按服务商要求填写</div>`;
+    return;
   }
   $('fBase').value = base;
-  box.innerHTML = `<div class="testbox run">⏳ 正在检索模型并验证 ${aiEscape(base)} …</div>`;
-
-  let listedIds = null;
+  const channel = {base, key, model, style};
+  const preview = aiChatRequest(style, base, key, model,
+    [{role:'user', content:'请只回复：连接成功'}], 16, {temperature:0});
+  box.innerHTML = `<div class="testbox run">⏳ 正在验证 ${aiEscape(preview.url)} …</div>`;
   try{
-    listedIds = await fetchAiModels(base, key);
-    if (!listedIds.includes(model)){
-      const select = $('fModelSelect');
-      select.innerHTML = '<option value="">选择一个模型</option>' + listedIds.map(id=>`<option value="${aiEscape(id)}">${aiEscape(id)}</option>`).join('');
-      box.innerHTML = `<div class="testbox err">✕ 当前模型不在该 Key 的可用列表中<br><span style="opacity:.85">请选择模型列表中的实际 id，再重新测试。</span></div>`;
-      return;
-    }
-  }catch(err){
-    /* 部分兼容服务不提供 /models；404/405 时仍用真实聊天请求继续验证。 */
-    if (!['HTTP_404','HTTP_405'].includes(err.message)){
-      box.innerHTML = `<div class="testbox err">✕ 无法读取模型列表，尚未进行聊天测试<br><span style="opacity:.85">${diagnose(err)}</span></div>`;
-      return;
-    }
-  }
-
-  const url = aiEndpoint(base, '/chat/completions');
-  const ctrl = new AbortController();
-  const timer = setTimeout(()=>ctrl.abort(), 20000);
-  const t0 = performance.now();
-
-  try {
-    const res = await fetch(url, {
-      method:'POST',
-      headers: aiHeaders(key),
-      body: JSON.stringify(aiRequestBody(model, [{role:'user',content:'请只回复：连接成功'}], {temperature:0, max_tokens:8})),
-      signal: ctrl.signal,
-    });
-    clearTimeout(timer);
-    const ms = Math.round(performance.now() - t0);
-
-    if (!res.ok){
-      const body = await res.text().catch(()=> '');
-      const err = new Error('HTTP_'+res.status); err.detail = body.slice(0,300);
-      box.innerHTML = `<div class="testbox err">✕ 连接失败<br>
-        <span style="opacity:.85">${diagnose(err)}</span></div>`;
-      return;
-    }
-    const data = await res.json();
-    const got = extractAiReplyText(data);
+    const result = await aiChat(channel, [{role:'user', content:'请只回复：连接成功'}],
+      16, 30000, {temperature:0});
+    const got = extractAiReplyText(result.data, style);
     if (!got){
-      const shape = data && data.choices ? 'choices 存在但没有可读取文本' : '返回结构不是 OpenAI chat/completions 格式';
-      box.innerHTML = `<div class="testbox err">✕ 接口返回成功，但没有可读取的模型回复<br><span style="opacity:.85">${shape}。请检查中转站协议，或选择支持 chat/completions 的模型。</span></div>`;
+      const shape = style === 'anthropic' ? 'Anthropic content'
+        : style === 'gemini' ? 'Gemini candidates'
+        : style === 'ollama' ? 'Ollama message'
+        : 'OpenAI choices';
+      box.innerHTML = `<div class="testbox err">✕ 接口返回成功，但没有可读取的模型回复<br>
+        <span style="opacity:.85">返回结构中没有可读取的 ${shape} 文本，请检查接口风格和模型协议。</span></div>`;
       return;
     }
-    const modelNote = listedIds ? '，已从 /models 核验' : '，该服务未提供 /models，已用实际聊天请求核验';
-    box.innerHTML = `<div class="testbox ok">✓ 模型实际响应 · ${ms}ms${modelNote}<br>
+    box.innerHTML = `<div class="testbox ok">✓ 模型实际响应 · ${result.ms}ms${result.retried ? ' · 已自动切换 max_completion_tokens 重试' : ''}<br>
       <span style="opacity:.85">模型 <b>${model.replace(/</g,'&lt;')}</b> 已响应
       ${got ? '（'+got.replace(/</g,'&lt;').slice(0,24)+'）' : ''}。可以保存了。</span></div>`;
-  } catch(e){
-    clearTimeout(timer);
-    const err = new Error(formatAiNetworkError(e));
+  }catch(err){
     box.innerHTML = `<div class="testbox err">✕ 连接失败<br>
       <span style="opacity:.85">${diagnose(err)}</span></div>`;
   }
@@ -5251,6 +5396,7 @@ $('baseUrlPreset').onchange = e=>{
   if (!v) return;
   $('fBase').value = v.base;
   $('fModel').value = v.model || '';
+  $('fStyle').value = aiStyle(v.style);
   resetModelSelect('先检索模型列表');
   document.querySelectorAll('#presetPills .pill').forEach(x=>x.classList.toggle('on', x.dataset.p===e.target.value));
 };
@@ -5274,7 +5420,12 @@ document.querySelectorAll('#presetPills .pill').forEach(p=>{
     document.querySelectorAll('#presetPills .pill').forEach(x=>x.classList.remove('on'));
     p.classList.add('on');
     const v = PRESETS[p.dataset.p];
-    if (v){ $('fBase').value = v.base; $('fModel').value = v.model; resetModelSelect('先检索模型列表'); }
+    if (v){
+      $('fBase').value = v.base;
+      $('fModel').value = v.model;
+      $('fStyle').value = aiStyle(v.style);
+      resetModelSelect('先检索模型列表');
+    }
     $('baseUrlPreset').value = p.dataset.p;
     $('fKey').focus();
   };
