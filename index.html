@@ -93,6 +93,10 @@ button{font-family:inherit}
   display:grid;place-items:center;font-size:10px;font-weight:700;letter-spacing:0}
 .block-title .hint{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;
   color:var(--muted-2);font-size:11px}
+.ai-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
+.ai-actions .hint{margin-left:0}
+.ai-clear-btn{padding:4px 8px;font-size:10.5px;white-space:nowrap}
+.ai-clear-btn:disabled{cursor:not-allowed;opacity:.5}
 
 /* 搜索 */
 .search{display:flex;align-items:center;gap:9px;background:var(--card);
@@ -867,7 +871,11 @@ select.input{cursor:pointer}
       <div id="panel-ai" class="hidden">
         <div class="block">
           <div class="block-title"><span class="step">AI</span>AI 辅助出行
-            <span class="hint" id="aiCfgLink" style="cursor:pointer;color:#FFB37A">⚙ 配置模型</span></div>
+            <span class="ai-actions">
+              <button class="btn-ghost ai-clear-btn" id="aiClearConversation" type="button"
+                title="清除本轮对话及本轮对话产生的临时定位、起点和路线">↺ 清空本轮</button>
+              <span class="hint" id="aiCfgLink" style="cursor:pointer;color:#FFB37A">⚙ 配置模型</span>
+            </span></div>
           <div id="aiNotice"></div>
           <div class="chatwrap" id="chat"></div>
           <div class="aiinput">
@@ -1521,7 +1529,8 @@ const S = {
   aiPlan: null,
   aiOrigin: null,
   aiPending: null,
-  aiWorkflow: { stage:'idle', candidates:[], token:0 }
+  aiWorkflow: { stage:'idle', candidates:[], token:0 },
+  aiConversation: { active:false, epoch:0, snapshot:null }
 };
 
 function invalidateWeatherState(){
@@ -3126,6 +3135,7 @@ function aiPlanSummary(plan){
 }
 let aiFlowId = 0;
 let aiChoiceId = 0;
+let aiAsyncEpoch = 0;
 function setAIWorkflow(stage, patch){
   S.aiWorkflow = Object.assign({
     stage,
@@ -3595,6 +3605,99 @@ async function runOfficialLookup(args){
 /* ══ AI 助手 ══ */
 const chat = [];
 let thinking = false;
+const AI_CONVERSATION_KEY = 'aiConversationSnapshot';
+const AI_SNAPSHOT_FIELDS = [
+  'siteId','spotIdx','mode','hotelIdx','poiOn','rainPct','rainModeChoice',
+  'wxDay','siteLocated','siteBuilt','curSite','newSite','locatedAt','geoResolved',
+  'pendingSite','nearbyReady','planned','origin','routeFor','routeMode',
+  'corridor','corridorErr','transit','transitErr','alongCache','rpFocus',
+  'shownRoutes','nearbyMode','rankExpanded','showBoundary','rainMode','rainAuto'
+];
+function aiClone(value){
+  if (value === undefined) return undefined;
+  return JSON.parse(JSON.stringify(value));
+}
+function aiConversationFormState(){
+  return ['q','qOrigin','selProvince','selCity','selDistrict',
+    'selOriginProvince','selOriginCity','selOriginDistrict'].reduce((out,id)=>{
+    const el = $(id);
+    if (el) out[id] = el.value;
+    return out;
+  },{});
+}
+function aiCaptureConversationSnapshot(){
+  const state = {};
+  AI_SNAPSHOT_FIELDS.forEach(key=>{ state[key] = aiClone(S[key]); });
+  return { state, form:aiConversationFormState(), savedAt:Date.now() };
+}
+function aiStartConversation(){
+  if (S.aiConversation && S.aiConversation.active && S.aiConversation.snapshot){
+    return S.aiConversation.epoch;
+  }
+  /* 刷新页面后业务状态会重新初始化，不能把上一页遗留的轮次基线套到新页面。 */
+  const snapshot = aiCaptureConversationSnapshot();
+  const epoch = (S.aiConversation && S.aiConversation.epoch || 0) + 1;
+  S.aiConversation = {active:true, epoch, snapshot};
+  sessionStore.set(AI_CONVERSATION_KEY, snapshot);
+  return epoch;
+}
+function aiConversationActive(epoch){
+  return !!(S.aiConversation && S.aiConversation.active &&
+    S.aiConversation.epoch === epoch);
+}
+function aiRestoreConversationSnapshot(snapshot){
+  if (!snapshot || !snapshot.state) return false;
+  AI_SNAPSHOT_FIELDS.forEach(key=>{
+    if (Object.prototype.hasOwnProperty.call(snapshot.state,key)) S[key] = aiClone(snapshot.state[key]);
+  });
+  Object.entries(snapshot.form || {}).forEach(([id,value])=>{
+    const el = $(id); if (el) el.value = value == null ? '' : value;
+  });
+  return true;
+}
+function clearAIConversation(){
+  if (thinking){
+    toast('当前正在生成或规划，完成后再清空');
+    return;
+  }
+  if (S.aiPlanBusy || ['site_searching','origin_searching','route_building'].includes(S.aiWorkflow && S.aiWorkflow.stage)){
+    toast('当前正在检索或规划，完成后再清空');
+    return;
+  }
+  const conversation = S.aiConversation || {};
+  if (!chat.length && !conversation.active && !conversation.snapshot &&
+      !S.aiPlan && !S.aiOrigin && !S.aiPending && !S.aiImage){
+    toast('当前没有可清空的对话');
+    return;
+  }
+  if (!window.confirm('清空后将删除本轮对话，并撤销本轮对话产生的考点、起点和路线变化。是否继续？')) return;
+  const snapshot = conversation.snapshot || sessionStore.get(AI_CONVERSATION_KEY, null);
+  const nextEpoch = (conversation.epoch || 0) + 1;
+  /* 让所有地点检索、路线计算和候选按钮失效，旧回调不得写回新一轮。 */
+  aiFlowId++;
+  aiChoiceId++;
+  aiAsyncEpoch = nextEpoch;
+  S.weatherRequestId = (S.weatherRequestId || 0) + 1;
+  S.aiConversation = {active:false, epoch:nextEpoch, snapshot:null};
+  sessionStore.del(AI_CONVERSATION_KEY);
+  chat.length = 0;
+  clearAIImage();
+  S.aiPlan = null;
+  S.aiOrigin = null;
+  S.aiPending = null;
+  S.aiPlanBusy = false;
+  resetAIWorkflow();
+  aiRestoreConversationSnapshot(snapshot);
+  clearRouteInfo();
+  if (KDRMap.clearRoutes) KDRMap.clearRoutes();
+  render();
+  bootEnv();
+  loadRealWeather();
+  syncRealMap();
+  switchTab('ai');
+  renderChat();
+  toast('已清空本轮对话及其临时定位、起点和路线');
+}
 
 function aiNotice(){
   const box = $('aiNotice');
@@ -3608,12 +3711,13 @@ function aiNotice(){
   } else {
     box.innerHTML = `<div style="background:var(--amber-soft);border:1px solid rgba(255,138,61,.3);
       border-radius:11px;padding:11px 12px;font-size:11.5px;line-height:1.65;margin-bottom:12px">
-      <div style="color:#FFB37A;font-weight:600;margin-bottom:3px">⚙ 未接入模型 · 下面是本地规则回答</div>
+      <div style="color:#FFB37A;font-weight:600;margin-bottom:3px">⚙ 当前未接入 LLM · 由本地规则引擎处理</div>
       <span style="color:var(--muted)">
       本项目<b>不内置任何 API Key</b>。点右上角 <b>⚙</b> 填入你自己的
       Base URL / API Key / 模型名即可接入（DeepSeek、智谱、通义、豆包、Kimi、
       硅基流动均已实测支持浏览器直连）。<br>
-      未配置时仍可使用本地规则引擎；临时组合路线需要百度地图服务可用。</span></div>`;
+      当前只能识别有限的考点、起点、路线、出行方式和周边设施表达，理解范围与回复灵活性无法媲美 LLM；
+      真实地点、地图和路线仍由百度地图服务完成。</span></div>`;
   }
   const l = $('aiCfg2'); if (l) l.onclick = openSettings;
 }
@@ -3749,6 +3853,7 @@ function aiCurrentSiteMatches(query){
 }
 
 async function aiSearchSite(query, openTab, request){
+  const asyncEpoch = aiAsyncEpoch;
   if (!KDRMap.isReady()){
     pushMsg('ai','地图尚未就绪，暂时无法查询新考点；请稍后再试或直接使用考点选择页。','');
     return;
@@ -3764,6 +3869,7 @@ async function aiSearchSite(query, openTab, request){
   const hint = geoHint();
   const anchor = (await geocodeOne(hint ? hint + kw : kw, hint))
     || (hint ? await geocodeOne(hint, '') : null);
+  if (asyncEpoch !== aiAsyncEpoch) return;
   if (!anchor){
     resetAIWorkflow();
     pushMsg('ai','无法确定考点的检索区域，请在考点选择页先选省、市，或输入更完整的校区与地址。','');
@@ -3774,6 +3880,7 @@ async function aiSearchSite(query, openTab, request){
       ['ai-site', hint, kw, anchor[0].toFixed(3), anchor[1].toFixed(3)],
       ()=>KDRMap.searchNearby(kw, anchor, 50000, 6),
       { cacheIf:d=>Array.isArray(d) && d.length>0 });
+    if (asyncEpoch !== aiAsyncEpoch) return;
     const list = (r.data || []).filter(x=>x && x.bd09
       && !/人民政府|区政府|街道办事处|居委会|委员会|管理局|政务/.test(x.name)
       && !/轨道交通|公交线路|^\d+路[;；]/.test(x.addr || '')).slice(0,5);
@@ -3814,6 +3921,7 @@ async function aiSearchSite(query, openTab, request){
 }
 
 async function aiSearchOrigin(query, mode){
+  const asyncEpoch = aiAsyncEpoch;
   const kw = String(query || '').trim();
   if (!kw){
     pushMsg('ai','请提供酒店、住址、车站或其他出发地点。','');
@@ -3827,6 +3935,7 @@ async function aiSearchOrigin(query, mode){
   /* 当前考点的收录住宿优先本地精确匹配，不再额外消耗地点检索额度。 */
   const local = HOTELS().find(h=>h.bd09 && (h.n === kw || h.n.includes(kw) || kw.includes(h.n)));
   if (local){
+    if (asyncEpoch !== aiAsyncEpoch) return false;
     await aiContinueAfterOrigin(local.bd09, local.n, mode);
     return true;
   }
@@ -3834,6 +3943,7 @@ async function aiSearchOrigin(query, mode){
   setAIWorkflow('origin_searching', {originQuery:kw, mode:mode || null});
   showProgress('正在定位出发地点…');
   const center = curCenter();
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   if (!center){
     hideProgress();
     pushMsg('ai','当前没有可用的考点中心，无法确定出发地点检索范围。','');
@@ -3851,6 +3961,7 @@ async function aiSearchOrigin(query, mode){
       ()=>KDRMap.searchNearby(kw, center, 50000, 6),
       { cacheIf:d=>Array.isArray(d) && d.length > 0 }
     );
+    if (asyncEpoch !== aiAsyncEpoch) return false;
     list = (r.data || []).filter(x=>x && x.bd09 && x.name).slice(0,5);
   }catch(e){
     if (e.message === 'QUOTA_GUARD') showQuotaFull();
@@ -3859,6 +3970,7 @@ async function aiSearchOrigin(query, mode){
   if (!list.length){
     try{
       const pt = await geocodeOne(kw, '');
+      if (asyncEpoch !== aiAsyncEpoch) return false;
       if (pt) list = [{name:kw, addr:'按地址解析', bd09:pt, _geo:true}];
     }catch(e){}
   }
@@ -3884,7 +3996,9 @@ async function aiSearchOrigin(query, mode){
 }
 
 async function aiContinueAfterOrigin(pt, name, mode){
+  const asyncEpoch = aiAsyncEpoch;
   if (!pt) return false;
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   setOrigin(pt, name || '出发地点');
   if (mode) S.mode = mode;
   S.routeMode = S.mode || 'drive';
@@ -3894,6 +4008,7 @@ async function aiContinueAfterOrigin(pt, name, mode){
     mode:S.routeMode,
   });
   await startPlan();
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   if (!S.planned){
     setAIWorkflow('nearby_ready', {origin:{name:name || '出发地点', pt}, mode:S.routeMode});
     pushMsg('ai','出发地点已写入，但百度这次没有返回可用路线。可以换一种出行方式，或稍后重试。','');
@@ -3912,7 +4027,9 @@ async function aiContinueAfterOrigin(pt, name, mode){
 }
 
 async function aiOpenFormalOriginRoute(mode){
+  const asyncEpoch = aiAsyncEpoch;
   if (!S.routeFor || !S.routeFor.origin || !S.routeFor.dest) return false;
+  setAIWorkflow('route_building', {origin:S.routeFor.origin, site:S.routeFor.dest, mode});
   S.routeMode = mode || S.routeMode || S.mode || 'drive';
   switchTab('route', {keepAIChat:true});
   renderRoutePlan(); renderMap(); renderLegend();
@@ -3921,7 +4038,9 @@ async function aiOpenFormalOriginRoute(mode){
   }else{
     await ensureCorridor(S.routeMode);
   }
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   await ensureAlong(S.routeMode);
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   renderRoutePlan(); renderMap(); renderLegend(); renderRain(S.rainPct);
   syncFormalRouteInfo();
   setAIWorkflow('route_ready', {
@@ -3939,9 +4058,11 @@ async function aiOpenFormalOriginRoute(mode){
 }
 
 async function aiContinueAfterSite(c, hint, request){
+  const asyncEpoch = aiAsyncEpoch;
   request = request || {};
   setLocatedSite(c.bd09, c.name, hint || '', c.addr || '');
   await beginSearch();
+  if (asyncEpoch !== aiAsyncEpoch) return;
   if (!S.nearbyReady){
     resetAIWorkflow();
     pushMsg('ai','考点已定位，但周边设施尚未生成成功。请在考点选择页重试“开始检索”；本次没有生成住宿或路线。','');
@@ -3984,11 +4105,13 @@ function aiFormalRouteActions(token){
   </div>`;
 }
 async function aiSelectWorkflowHotel(index){
+  const asyncEpoch = aiAsyncEpoch;
   const h = HOTELS()[index];
   if (!h || !h.bd09) {
     pushMsg('ai','没有找到这个居住点，请从候选列表中重新选择。','');
     return false;
   }
+  setAIWorkflow('route_building', {hotel:{index}});
   S.aiPending = null;
   S.hotelIdx = index;
   S.mode = 'drive';
@@ -4008,6 +4131,7 @@ async function aiSelectWorkflowHotel(index){
   S.planned = false;
   render();
   const route = await drawChosenRoute(index, 'drive');
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   let detailed = route;
   if (detailed && detailed.path && detailed.path.length > 1 &&
       KDRMap.enrichDrivingRoute){
@@ -4040,14 +4164,17 @@ async function aiSelectWorkflowHotel(index){
   return true;
 }
 async function aiStartWorkflowPlan(){
+  const asyncEpoch = aiAsyncEpoch;
   S.aiPending = null;
   if (!S.nearbyReady){
     pushMsg('ai','请先定位考点并生成周边设施，再开始行程规划。','');
     return false;
   }
+  setAIWorkflow('route_building', {mode:S.mode || 'drive'});
   S.mode = 'drive';
   S.routeMode = 'drive';
   await startPlan();
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   if (S.tab === 'trip') switchTab('trip', {keepAIChat:true});
   if (!S.planned) return false;
   if (S.origin && S.origin.pt){
@@ -4068,15 +4195,18 @@ function aiFormalRouteMode(mode){
   return mode && i >= 0 && HOTELS()[i] && S.routeFor ? i : -1;
 }
 async function aiSwitchFormalRoute(mode){
+  const asyncEpoch = aiAsyncEpoch;
   const i = aiFormalRouteMode(mode);
   if (i < 0){
     pushMsg('ai','请先完成考点和居住点选择，再切换正式路线方式。','');
     return;
   }
+  setAIWorkflow('route_building', {hotel:{name:HOTELS()[i].n, pt:HOTELS()[i].bd09}, mode});
   S.mode = mode;
   S.routeMode = mode;
   S.shownRoutes[i] = mode;
   await openRoutePlan(i, {keepAIChat:true});
+  if (asyncEpoch !== aiAsyncEpoch) return false;
   setAIWorkflow('route_ready', {hotel:{name:HOTELS()[i].n, pt:HOTELS()[i].bd09}, mode});
   const result = mode === 'metro' ? S.transit : S.corridor && S.corridor[mode];
   if (!result){
@@ -4088,6 +4218,7 @@ async function aiSwitchFormalRoute(mode){
   pushMsg('ai',`已将正式路线切换为<b>${aiModeName(mode)}</b>，右侧地图和路线规划页面已同步更新。`, '');
 }
 async function aiSearchPoi(category, query){
+  const asyncEpoch = aiAsyncEpoch;
   const cat = aiCategoryKey(category);
   const list = aiPoiOptions(cat, query);
   if (!cat && !String(query || '').trim()){
@@ -4101,6 +4232,7 @@ async function aiSearchPoi(category, query){
   }
   if (cat) S.poiOn[cat] = true;
   switchTab('nearby');
+  if (asyncEpoch !== aiAsyncEpoch) return;
   render();
   const label = (POIS.find(x=>x.id===cat)||{}).n || query || '服务点';
   pushMsg('ai', `<b>${aiEscape(label)}</b>共找到 ${list.length} 个：<br>${
@@ -4409,6 +4541,8 @@ async function sendAI(q){
   const image = S.aiImage;
   let imageSubmitted = false;
   if ((!text && !image) || thinking) return;
+  const conversationEpoch = aiStartConversation();
+  aiAsyncEpoch = conversationEpoch;
   if (S.aiPending?.type === 'image-site'){
     S.aiPending = null;
     renderChat();
@@ -4503,6 +4637,8 @@ function setSendState(on){
   b.disabled = on;
   b.style.opacity = on ? '.5' : '';
   b.textContent = on ? '…' : '发送';
+  const clear = $('aiClearConversation');
+  if (clear) clear.disabled = on;
 }
 
 function bindChatActions(){
@@ -5202,6 +5338,7 @@ $('aiImage').addEventListener('change', async e=>{
   }
 });
 $('aiImageClear').onclick = clearAIImage;
+$('aiClearConversation').onclick = clearAIConversation;
 $('quickAsk').addEventListener('click', e=>{
   const p = e.target.closest('[data-q]');
   if (p) sendAI(p.dataset.q);
