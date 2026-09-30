@@ -16,6 +16,7 @@
   'use strict';
 
   const FORECAST = 'https://api.open-meteo.com/v1/forecast';
+  const AIR_QUALITY = 'https://air-quality-api.open-meteo.com/v1/air-quality';
   const ARCHIVE  = 'https://archive-api.open-meteo.com/v1/archive';
   const TZ = 'Asia/Shanghai';
   const CACHE_NS = 'kdr_wx_';
@@ -112,14 +113,20 @@
     const u = FORECAST + '?latitude='+lat+'&longitude='+lng
       + '&hourly=precipitation,precipitation_probability,temperature_2m,weather_code'
       + '&timezone='+TZ+'&start_date='+dateStr+'&end_date='+dateStr;
-    const d = await jget(u);
+    const dustUrl = AIR_QUALITY + '?latitude=' + lat + '&longitude=' + lng
+      + '&hourly=dust&timezone=' + TZ + '&start_date=' + dateStr + '&end_date=' + dateStr;
+    const [d, aq] = await Promise.all([jget(u), jget(dustUrl).catch(()=>({}))]);
     const H = d.hourly || {};
+    const AQ = aq.hourly || {};
+    const dustByTime = {};
+    (AQ.time || []).forEach((t, i)=>{ dustByTime[t] = AQ.dust ? AQ.dust[i] : null; });
     const hours = (H.time||[]).map((t,i)=>({
       h: +t.slice(11,13),
       precip: H.precipitation ? (H.precipitation[i]||0) : 0,
       prob:   H.precipitation_probability ? (H.precipitation_probability[i]||0) : 0,
       temp:   H.temperature_2m ? H.temperature_2m[i] : null,
       code:   H.weather_code ? H.weather_code[i] : null,
+      dust:   dustByTime[t] != null ? dustByTime[t] : null,
     }));
     const out = { mode:'forecast', date:dateStr, hours, stats: stats(hours) };
     cacheSet(ck, out);
@@ -182,7 +189,7 @@
 
     const u = FORECAST + '?latitude=' + lat + '&longitude=' + lng
       + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max'
-      + '&hourly=precipitation'
+      + '&hourly=precipitation,weather_code,temperature_2m'
       + '&timezone=' + TZ + '&start_date=' + startDate + '&end_date=' + end;
     const d = await jget(u);
     const D = d.daily || {}, H = d.hourly || {};
@@ -190,7 +197,13 @@
       const hours = [];
       (H.time || []).forEach((tt, j) => {
         if (tt.slice(0, 10) !== t) return;
-        hours.push({ h: +tt.slice(11, 13), precip: H.precipitation ? (H.precipitation[j] || 0) : 0 });
+        hours.push({
+          h: +tt.slice(11, 13),
+          precip: H.precipitation ? (H.precipitation[j] || 0) : 0,
+          code: H.weather_code ? H.weather_code[j] : null,
+          temp: H.temperature_2m ? H.temperature_2m[j] : null,
+          prob: null,
+        });
       });
       return {
         date: t,

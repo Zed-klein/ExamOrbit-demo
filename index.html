@@ -645,6 +645,435 @@ select.input{cursor:pointer}
   box-shadow:0 10px 30px rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:.25s}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 .hidden{display:none !important}
+
+/* ══ 视觉层重组：01-04 主工作流 / AI 独立调用层
+   只调整 CSS，不改变 DOM、事件、数据、接口或业务状态。 */
+.topbar{
+  height:56px;
+  flex-basis:56px;
+  padding:0 18px;
+  gap:14px;
+}
+.brand{min-width:206px;gap:10px}
+.brand .dot{
+  width:8px;
+  height:8px;
+  border-radius:2px;
+  transform:rotate(45deg);
+  box-shadow:0 0 0 3px rgba(255,138,61,.12),0 0 12px rgba(255,138,61,.55);
+}
+.brand small{letter-spacing:.7px}
+.tabs{
+  gap:2px;
+  padding:0;
+  background:transparent;
+  border-radius:0;
+  align-self:stretch;
+}
+.tabs button{
+  position:relative;
+  min-width:92px;
+  height:100%;
+  padding:6px 12px;
+  border-radius:0;
+  border-bottom:2px solid transparent;
+}
+.tabs button.on{
+  background:transparent;
+  color:var(--text);
+  border-bottom-color:var(--amber);
+}
+.tabs button.on::after{
+  content:"";
+  position:absolute;
+  left:12px;
+  right:12px;
+  bottom:-1px;
+  height:1px;
+  background:var(--amber);
+  opacity:.38;
+}
+/* AI 仍保留原有点击入口，只在视觉上与 01-04 分组。 */
+.tabs button[data-tab="ai"]{
+  min-width:112px;
+  margin-left:10px;
+  padding-left:18px;
+  border-left:1px solid var(--border-strong);
+  color:var(--cyan);
+}
+.tabs button[data-tab="ai"]::first-letter{color:var(--cyan)}
+.tabs button[data-tab="ai"].on{
+  color:var(--cyan);
+  border-bottom-color:var(--cyan);
+}
+.tabs button[data-tab="ai"].on::after{background:var(--cyan)}
+.tabs button[data-tab="ai"]{
+  font-size:12px;
+}
+.tabs button[data-tab="ai"]::after{
+  content:none;
+}
+.iconbtn{
+  width:32px;
+  height:32px;
+  border-radius:7px;
+}
+.sidebar{
+  width:392px;
+  flex-basis:392px;
+}
+.sb-scroll{
+  padding:18px 17px 22px;
+}
+.block{
+  position:relative;
+  margin-bottom:22px;
+}
+.block-title{
+  min-height:20px;
+  gap:8px;
+  margin-bottom:11px;
+  letter-spacing:.65px;
+}
+.block-title .step{
+  width:19px;
+  height:19px;
+  border-radius:4px;
+  border:1px solid rgba(255,138,61,.22);
+}
+.search,
+.input,
+.sel,
+.aiinput input{
+  border-radius:7px;
+}
+.search{padding:10px 12px}
+.sitecard,
+.rank-item,
+.nb-item,
+.rp-summary,
+.rp-detail,
+.rp-step,
+.wx-sum{
+  border-radius:7px;
+}
+.sitecard{
+  box-shadow:inset 3px 0 0 var(--amber);
+}
+.rank-item{
+  padding:11px 12px;
+}
+.map{
+  background:var(--map-bg);
+}
+.map-badge{
+  top:16px;
+  left:16px;
+  gap:6px;
+}
+.mb,
+.maptype,
+.legend,
+.rainpanel,
+.route-info,
+.map-progress,
+.namecard{
+  border-radius:7px;
+}
+.mb{
+  padding:6px 10px;
+}
+.maptype{top:58px;right:16px}
+.legend{bottom:17px;left:16px}
+.rainpanel{
+  bottom:16px;
+  width:min(640px,calc(100% - 34px));
+}
+/* AI 面板：独立调用层的视觉边界，不与 01-04 内容卡片混成同一层级。 */
+#panel-ai{
+  position:relative;
+}
+#panel-ai::before{
+  content:"INDEPENDENT ASSISTANT";
+  display:block;
+  margin:-2px 0 13px;
+  padding-bottom:8px;
+  border-bottom:1px solid var(--border);
+  color:var(--cyan);
+  font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:1px;
+}
+#panel-ai .block{
+  padding:13px;
+  border:1px solid rgba(46,197,255,.28);
+  border-left:3px solid var(--cyan);
+  border-radius:8px;
+  background:linear-gradient(135deg,var(--cyan-soft),rgba(255,255,255,.025) 54%);
+}
+#panel-ai .block-title{
+  color:var(--cyan);
+  letter-spacing:.2px;
+  text-transform:none;
+}
+#panel-ai .block-title .step{
+  background:var(--cyan-soft);
+  border-color:rgba(46,197,255,.35);
+  color:var(--cyan);
+}
+#panel-ai .chatwrap{
+  min-height:200px;
+  padding:10px 0 3px;
+  border-top:1px solid rgba(46,197,255,.14);
+}
+#panel-ai .aiinput{
+  margin-top:10px;
+}
+#panel-ai .aiinput button{
+  border-radius:7px;
+}
+#panel-ai .quickAsk,
+#panel-ai #quickAsk{
+  gap:5px;
+}
+#panel-ai #quickAsk .pill{
+  border-radius:5px;
+}
+#panel-ai .tip-note{
+  padding-top:10px;
+  border-top:1px solid rgba(46,197,255,.14);
+}
+@media(max-width:1180px){
+  .brand{min-width:174px}
+  .tabs button{min-width:78px;padding-left:8px;padding-right:8px}
+  .tabs button[data-tab="ai"]{min-width:104px;margin-left:6px;padding-left:12px}
+}
+@media(max-width:760px){
+  .topbar{padding:0 10px;gap:7px}
+  .brand{min-width:auto}
+  .brand small{display:none}
+  .tabs{overflow-x:auto;max-width:calc(100vw - 94px)}
+  .tabs button{min-width:76px;font-size:11px;padding-left:7px;padding-right:7px}
+  .tabs button[data-tab="ai"]{min-width:96px;margin-left:4px;padding-left:10px}
+  .sidebar{width:100%;flex-basis:auto}
+  .sb-scroll{padding:14px 13px 18px}
+}
+
+/* ══ 城市交通图主题 + 出行任务单侧栏
+   保留原有主题切换，深色与浅色只改变视觉表面。 */
+:root{
+  --bg:#111817;
+  --map-bg:#0B1220;
+  --panel:rgba(21,30,27,.9);
+  --panel-solid:#151E1B;
+  --card:rgba(255,255,255,.055);
+  --card-hover:rgba(255,255,255,.095);
+  --border:rgba(226,239,229,.12);
+  --border-strong:rgba(226,239,229,.23);
+  --text:#E9EEE9;
+  --muted:#93A39A;
+  --muted-2:#64756C;
+  --amber:#E87832;
+  --amber-soft:rgba(232,120,50,.15);
+  --cyan:#4BAE9B;
+  --cyan-soft:rgba(75,174,155,.14);
+  --green:#66B99A;
+  --red:#C94D4D;
+  --topbar:rgba(17,24,23,.95);
+  --shadow:0 14px 38px rgba(0,0,0,.4);
+}
+body.light{
+  --bg:#F5F7F6;
+  --map-bg:#E4EAF1;
+  --panel:rgba(255,255,255,.92);
+  --panel-solid:#F7F9F8;
+  --card:rgba(32,49,58,.055);
+  --card-hover:rgba(32,49,58,.1);
+  --border:rgba(32,49,58,.13);
+  --border-strong:rgba(32,49,58,.25);
+  --text:#20313A;
+  --muted:#61727A;
+  --muted-2:#8A9AA0;
+  --amber:#DC7840;
+  --amber-soft:rgba(220,120,64,.13);
+  --cyan:#3A9579;
+  --cyan-soft:rgba(58,149,121,.12);
+  --green:#3A9579;
+  --red:#B95050;
+  --topbar:rgba(248,250,249,.95);
+  --shadow:0 14px 34px rgba(32,49,58,.14);
+}
+.sidebar{
+  background:var(--panel-solid);
+}
+.sb-scroll{
+  padding:16px 15px 22px;
+}
+#panel-pick > .block{
+  margin-bottom:12px;
+  padding:14px;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--card);
+}
+#panel-pick > .block::before{
+  display:block;
+  margin-bottom:9px;
+  color:var(--muted-2);
+  font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:1px;
+}
+#panel-pick > .block:nth-child(1)::before{content:"DESTINATION / 考试地点";}
+#panel-pick > .block:nth-child(2)::before{content:"ORIGIN / 出发地点 · 可选";}
+#panel-pick > .block:nth-child(3)::before{content:"GENERATE / 生成方案";}
+#panel-pick > .block:nth-child(4)::before{content:"EXAM ANCHOR / 考试锚点";}
+#panel-pick > .block:nth-child(1){
+  border-color:rgba(232,120,50,.34);
+  background:linear-gradient(135deg,var(--amber-soft),var(--card) 48%);
+}
+#panel-pick > .block:nth-child(2){
+  border-color:rgba(75,174,155,.25);
+}
+#panel-pick > .block:nth-child(3){
+  padding:12px 14px;
+  background:transparent;
+  border-color:transparent;
+}
+#panel-pick > .block:nth-child(4){
+  margin-bottom:0;
+}
+#panel-pick .block-title{
+  margin-bottom:9px;
+  color:var(--text);
+  letter-spacing:.1px;
+  text-transform:none;
+}
+#panel-pick .block-title .step{
+  width:21px;
+  height:21px;
+  border-radius:6px;
+}
+#panel-pick > .block:nth-child(1) .block-title .step{
+  background:var(--amber);
+  color:#160C04;
+  border-color:var(--amber);
+}
+#panel-pick > .block:nth-child(2) .block-title .step{
+  background:var(--cyan-soft);
+  color:var(--cyan);
+  border-color:rgba(75,174,155,.3);
+}
+#panel-pick > .block:nth-child(4) .block-title .step{
+  background:var(--card-hover);
+  color:var(--muted);
+}
+#panel-pick .geo-row{
+  gap:6px;
+}
+#panel-pick .sel{
+  min-height:38px;
+  padding:8px 10px;
+  background:var(--card);
+}
+#panel-pick .search{
+  min-height:43px;
+  margin-top:8px !important;
+  background:var(--panel-solid);
+  border-color:var(--border-strong);
+}
+#panel-pick .search:focus-within{
+  border-color:rgba(232,120,50,.6);
+  box-shadow:0 0 0 3px var(--amber-soft);
+}
+#panel-pick .quiz-row{
+  gap:6px;
+  margin-top:8px;
+}
+#panel-pick .quiz-row .btn-ghost{
+  min-height:35px;
+  padding:7px 8px;
+  background:transparent;
+}
+#panel-pick .quiz-row .btn-ghost:first-child{
+  color:var(--amber);
+  border-color:rgba(232,120,50,.36);
+}
+#panel-pick .quiz-row .btn-ghost:last-child{
+  color:var(--cyan);
+  border-color:rgba(75,174,155,.3);
+}
+#panel-pick #caseChips{
+  margin:0 0 9px;
+}
+#panel-pick #caseChips .chip{
+  padding:5px 8px;
+  border-radius:6px;
+  background:var(--panel-solid);
+}
+#panel-pick #btnGo{
+  min-height:43px;
+  border-radius:8px;
+  letter-spacing:.1px;
+  box-shadow:0 7px 18px rgba(232,120,50,.18);
+}
+#panel-pick .tip-note{
+  color:var(--muted);
+  line-height:1.55;
+}
+#panel-pick #examForm{
+  margin-top:10px !important;
+  padding-top:10px;
+  border-top:1px solid var(--border);
+}
+#panel-pick #examForm .input{
+  min-height:36px;
+  background:var(--panel-solid);
+}
+#panel-pick .time-pick{
+  min-height:36px;
+  border-radius:7px;
+}
+#panel-pick .ef-quick{
+  gap:5px;
+  margin-top:6px;
+}
+#panel-pick .pill-mini{
+  border-radius:5px;
+}
+#panel-pick #examWeatherHint{
+  color:var(--cyan);
+}
+#panel-pick #examHint{
+  color:var(--muted);
+}
+#panel-ai{
+  margin:4px 0 0;
+}
+#panel-ai .block{
+  box-shadow:0 8px 22px rgba(0,0,0,.12);
+}
+.sitecard{
+  background:var(--card);
+}
+.btn-primary{
+  background:var(--amber);
+}
+body.light .mapload,
+body.light .map-progress,
+body.light .namecard{
+  color:var(--text);
+}
+@media(max-width:760px){
+  #panel-pick > .block{
+    padding:12px;
+  }
+  #panel-pick > .block:nth-child(1),
+  #panel-pick > .block:nth-child(2){
+    border-radius:8px;
+  }
+  #panel-pick .geo-row{
+    grid-template-columns:1fr 1fr;
+  }
+}
 </style>
 </head>
 <body>
@@ -652,7 +1081,7 @@ select.input{cursor:pointer}
 
   <!-- ══ 顶栏 ══ -->
   <div class="topbar">
-    <div class="brand"><span class="dot"></span>考点雷达 <small>KAODIAN RADAR</small></div>
+    <div class="brand"><span class="dot"></span>考点雷达 <small>ExamOrbit</small></div>
     <div class="spacer"></div>
     <div class="tabs" id="tabs">
       <button data-tab="pick" class="on">① 考点选择</button>
@@ -670,7 +1099,7 @@ select.input{cursor:pointer}
       <span class="env" id="envTime" title="当前时间">--:--</span>
       <span class="env-sep"></span>
       <span class="env" id="envWx" title="当前位置实时天气（Open-Meteo）">—</span>
-      <span id="rainFlag" class="rain-flag" style="display:none">🌧 雨天推荐</span>
+      <span id="rainFlag" class="rain-flag" style="display:none">🌦 恶劣天气推荐</span>
     </div>
 
     <div class="status" id="bmapStatus"><i></i>地图未接入</div>
@@ -824,8 +1253,8 @@ select.input{cursor:pointer}
           <div class="block-title"><span class="step">3</span>出行偏好 <span class="hint">改变排序</span></div>
           <div class="pills" id="modePills"></div>
           <div class="switch-row" id="rainToggleRow">
-            <div class="label">雨天默认驾车优先
-              <small>检测到考试通勤时段有降水时，优先短时驾车路线；可手动切换其他方式</small></div>
+            <div class="label">恶劣天气推荐
+              <small>检测到考试通勤时段有恶劣天气时，优先更稳妥的出行方案；可手动切换其他方式</small></div>
             <div class="sw on" id="rainSw"></div>
           </div>
         </div>
@@ -894,7 +1323,7 @@ select.input{cursor:pointer}
             <span class="pill" data-q="选择住宿">选择住宿</span>
             <span class="pill" data-q="输入出发地点">输入出发点</span>
             <span class="pill" data-q="改成公共交通">切换出行方式</span>
-            <span class="pill" data-q="打开淋雨推演，告诉我最晚几点出发">查看出发时间</span>
+            <span class="pill" data-q="打开天气推演，告诉我最晚几点出发">查看出发时间</span>
             <span class="pill" data-q="查询当前考点附近的打印店、药店和派出所">查周边服务</span>
           </div>
           <div class="tip-note" style="margin-top:13px">
@@ -995,16 +1424,16 @@ select.input{cursor:pointer}
         <div class="legend" id="legendBox"></div>
         <div class="rainpanel hidden" id="rainPanel">
           <div class="rp-head">
-            <div class="rp-title"><span class="ic">☔</span>淋雨推演 · 拖动改变出发时间</div>
+            <div class="rp-title"><span class="ic" id="weatherSimIcon">🌦</span><span id="weatherSimTitle">天气推演</span> · 拖动改变出发时间</div>
             <div class="rp-out" id="rpOut">计算中…</div>
-            <button class="panel-toggle" id="rainPanelToggle" title="收起降雨推演" aria-label="收起降雨推演">⌄</button>
+            <button class="panel-toggle" id="rainPanelToggle" title="收起天气推演" aria-label="收起天气推演">⌄</button>
           </div>
           <div id="rainMeta" style="font-size:11px;color:var(--muted);margin:2px 0 8px"></div>
           <div class="win-label" id="winLabel">—</div>
           <div class="track" id="track"><div class="knob" id="knob"></div></div>
           <div class="slider-labels">
             <span>出发 <b id="depTime">7:45</b></span>
-            <span style="color:#8FD3FF" id="lblRisk">下雨可能性 —</span>
+            <span style="color:#8FD3FF" id="lblRisk">天气风险 —</span>
             <span>到达 <b id="arrTime">7:51</b></span>
           </div>
           <div class="rp-foot">
@@ -1370,7 +1799,14 @@ function rainRecommendationActive(){
 function recommendationMode(){
   return rainRecommendationActive() ? (S.rainModeChoice || 'drive') : S.mode;
 }
-const isoOf = () => ISO_CONF[recommendationMode()] || ISO_CONF.walk;
+/* 地图展示方式：路线规划页必须跟随实际生成的 routeMode，
+   不能继续读取左侧全局偏好 S.mode，否则左侧选步行、地图却显示驾车。 */
+function mapViewMode(){
+  return S.tab === 'route'
+    ? (S.routeMode || S.mode || 'walk')
+    : recommendationMode();
+}
+const isoOf = () => ISO_CONF[mapViewMode()] || ISO_CONF.walk;
 
 /* ── 等距圈半径（按出行方式）──
    借鉴「15 分钟生活圈」的思路：不同出行方式的可达范围差别巨大，
@@ -1381,7 +1817,7 @@ const CIRCLE = {
   metro: { r:3000, name:'公交圈',  accent:'#2EC5FF' },
   drive: { r:5000, name:'驾车圈',  accent:'#A78BFA' },
 };
-const circleOf = () => CIRCLE[recommendationMode()] || CIRCLE.walk;
+const circleOf = () => CIRCLE[mapViewMode()] || CIRCLE.walk;
 /* 出行方式 → 快照里等距多边形的键 */
 const ISO_KEY = { walk:'walking', bike:'riding', metro:'transit', drive:'driving' };
 
@@ -1524,7 +1960,7 @@ const S = {
   hotelIdx: 0,
   poiOn: {print:1, study:1, store:1, pharm:1, police:1, hosp:1, park:1,
           breakfast:1, restaurant:1},
-  rainPct: null,          // 淋雨滑块的归一化位置；null = 用「现在 / 建议出发」初始化
+  rainPct: null,          // 天气推演滑块的归一化位置；null = 用「现在 / 建议出发」初始化
   theme: store.get('theme', 'dark'),
   mapType: store.get('mapType', 'normal'),
   wxDay: null,          // 考试日的逐小时降水（真实数据）
@@ -1547,6 +1983,8 @@ function invalidateWeatherState(){
   S.weatherRequestId = (S.weatherRequestId || 0) + 1;
   S.wxDay = null;
   S.rainMode = false;
+  S.weatherHazardType = null;
+  S.weatherHazardLabel = '';
   S.rainAuto = false;
   S.rainModeChoice = null;
 }
@@ -2008,6 +2446,8 @@ async function loadRealWeather(){
   /* 切换考点或考试日期后，旧地点的天气不能继续控制当前推荐。 */
   S.wxDay = null;
   S.rainMode = false;
+  S.weatherHazardType = null;
+  S.weatherHazardLabel = '';
   S.rainAuto = false;
   S.rainModeChoice = null;
   renderRain(S.rainPct);
@@ -2428,10 +2868,10 @@ function renderQuotaBar(){
   }).join('<span style="opacity:.3"> · </span>');
 }
 
-/* ══ 淋雨推演 ══ */
+/* ══ 天气推演 ══ */
 const PATH_LEN = 380;
 /* ══════════════════════════════════════════════════════════════
-   淋雨推演 · 基于真实降水
+   天气推演 · 基于真实天气类型
    ──────────────────────────────────────────────────────────────
    数据：KDRWeather.day() → 考试日逐小时降水
          16 天内用真实预报，超出用过去 5 年同日的历史气候概率
@@ -2439,6 +2879,42 @@ const PATH_LEN = 380;
          湿段锚定考点端（雨若在途中开始下，被淋到的是靠后那段）
    ══════════════════════════════════════════════════════════════ */
 const WET_MM = 0.1;                      // 判定「在下雨」的阈值 mm/h
+
+function weatherTypeFromCode(code, temp, precip, dust){
+  const c = Number(code);
+  if (c === 95 || c === 96 || c === 99) return 'thunder';
+  if ([71,73,75,77,85,86].includes(c)) return 'snow';
+  if ([51,53,55,56,57,61,63,65,66,67,80,81,82].includes(c)) return 'rain';
+  if ([45,48].includes(c)) return 'fog';
+  /* Open-Meteo 空气质量 dust 单位为 μg/m³；无 dust 数据时不做风速猜测。 */
+  if (Number(dust) >= 100) return 'dust';
+  if (c === 0) return 'clear';
+  if ([1,2,3].includes(c)) return 'cloudy';
+  /* 历史气候数据没有 weather_code，用温度和降水作保守分类。 */
+  if (precip >= WET_MM) return Number(temp) <= 1 ? 'snow' : 'rain';
+  return 'unknown';
+}
+function weatherTypeLabel(type){
+  return ({
+    rain:'下雨', snow:'下雪', thunder:'雷暴', fog:'大雾',
+    dust:'沙尘暴', clear:'晴', cloudy:'多云', unknown:'天气'
+  })[type] || '天气';
+}
+function weatherTypeIcon(type){
+  return ({
+    rain:'🌧', snow:'❄️', thunder:'⛈', fog:'🌫',
+    dust:'🌪', clear:'☀️', cloudy:'☁️', unknown:'🌦'
+  })[type] || '🌦';
+}
+function weatherSeverity(type){
+  return ({thunder:5, snow:4, rain:3, dust:3, fog:2, cloudy:0, clear:0, unknown:0})[type] || 0;
+}
+function weatherTypeAt(dayData, minutes){
+  if (!dayData || !dayData.hours || !dayData.hours.length) return 'unknown';
+  const h = ((minutes / 60) % 24 + 24) % 24;
+  const hour = dayData.hours[Math.floor(h) % dayData.hours.length] || {};
+  return weatherTypeFromCode(hour.code, hour.temp, hour.precip, hour.dust);
+}
 
 function currentWalk(){                  // 当前住宿的步行分钟
   const h = HOTELS()[S.hotelIdx];
@@ -2627,22 +3103,39 @@ function rainProbabilityAt(dayData, minutes){
   return Math.max(0, Math.min(100, pa + (pb - pa) * t));
 }
 
-/* 当前出发时刻的通勤风险：取“出发 → 当前方式预计到达”区间内的最高概率。 */
+/* 当前出发时刻的通勤风险：取通勤区间内最需要提示的天气类型和概率。 */
 function rainRiskInfo(depMin, commuteMin){
   const day = S.wxDay;
   const duration = Math.max(1, Math.round(commuteMin || currentCommuteMinutes()));
   if (!day || !day.hours || !day.hours.length) return null;
-  let maxProb = 0;
+  let maxProb = 0, peakType = 'unknown', peakSeverity = 0;
   let peakAt = depMin;
   for (let m = 0; m <= duration; m += 5){
     const p = rainProbabilityAt(day, depMin + m);
-    if (p > maxProb){
+    const type = weatherTypeAt(day, depMin + m);
+    const severity = weatherSeverity(type);
+    if (p > maxProb || (p === maxProb && severity > peakSeverity)){
       maxProb = p;
       peakAt = depMin + m;
+      peakType = type;
+      peakSeverity = severity;
+    }
+  }
+  if (maxProb === 0){
+    for (let m = 0; m <= duration; m += 5){
+      const type = weatherTypeAt(day, depMin + m);
+      if (weatherSeverity(type) > peakSeverity){
+        peakType = type;
+        peakSeverity = weatherSeverity(type);
+        peakAt = depMin + m;
+      }
     }
   }
   return {
     probability: Math.round(maxProb),
+    type: peakType,
+    label: weatherTypeLabel(peakType),
+    icon: weatherTypeIcon(peakType),
     peakAt,
     duration,
     start: depMin,
@@ -2748,6 +3241,11 @@ function renderRain(pct){
   const wetFrac = info ? Math.max(0, Math.min(1, info.wetFrac || 0)) : 0;
   const riskInfo = rainRiskInfo(dep, commuteMin);
   const rainRisk = riskInfo ? riskInfo.probability : null;
+  const weatherType = riskInfo ? riskInfo.type : 'unknown';
+  const weatherLabel = riskInfo ? riskInfo.label : '天气';
+  const simIcon = $('weatherSimIcon'), simTitle = $('weatherSimTitle');
+  if (simIcon) simIcon.textContent = weatherTypeIcon(weatherType);
+  if (simTitle) simTitle.textContent = '天气推演';
 
   /* 地图湿段（真实几何） */
   if (KDRMap.isReady()) KDRMap.paintRain(wetFrac);
@@ -2757,8 +3255,8 @@ function renderRain(pct){
 
   updateRainTrack(win);
   $('lblRisk').textContent = rainRisk == null
-    ? '下雨可能性 —'
-    : `下雨可能性 ${rainRisk}%`;
+    ? '天气风险 —'
+    : `${weatherLabel}可能性 ${rainRisk}%`;
   $('lblRisk').style.color = riskColor(rainRisk || 0);
 
   /* 文案：区分「有真实降水数据」与「无数据」 */
@@ -2783,13 +3281,13 @@ function renderRain(pct){
     h.textContent = '⚠️ 降水数据不可用，下面是示意';
     h.style.color = '#FF9FB2';
   } else if (rainRisk === 0){
-    h.textContent = '✅ 这个时间出发，通勤时段暂无降雨风险';
+    h.textContent = `✅ 这个时间出发，通勤时段暂无${weatherLabel}风险`;
     h.style.color = '#4ADE80';
   } else if (arrivalOverdue){
     h.textContent = `⚠️ 当前方式预计 ${fmtTime(arrival)} 到达，超过考前 30 分钟预留；建议尽快出发或切换更快路线`;
     h.style.color = '#FF9FB2';
   } else {
-    h.textContent = `这个时间出发，通勤区间的最高降雨可能性为 ${rainRisk}%`;
+    h.textContent = `这个时间出发，通勤区间的最高${weatherLabel}可能性为 ${rainRisk}%`;
     h.style.color = '';
   }
 
@@ -2809,7 +3307,7 @@ function renderRain(pct){
         ? '这个时间最稳 ✅'
         : `改到 ${fmtTime(best.at)} 出发可避开降雨风险`;
     } else {
-      o.textContent = `最低下雨可能性约 ${best.f}%（建议 ${fmtTime(best.at)} 出发）`;
+      o.textContent = `最低${weatherLabel}可能性约 ${best.f}%（建议 ${fmtTime(best.at)} 出发）`;
     }
   } else o.textContent = '—';
 
@@ -2818,8 +3316,8 @@ function renderRain(pct){
   const modeTag = S.wxDay.mode === 'forecast' ? '真实预报' : `历史气候（近 ${S.wxDay.years||0} 年）`;
   const el = $('rainMeta');
   if (el) el.innerHTML = S.wxDay.stats && st.hasRain
-    ? `<b style="color:var(--cyan)">${modeTag}</b> · 当日降水 ${st.totalMM}mm` +
-      (S.wxDay.mode==='climate' ? ` · 该时段降雨概率 ${st.maxProb}%` : '')
+    ? `<b style="color:var(--cyan)">${modeTag}</b> · 当日${weatherLabel}风险 ${rainRisk == null ? '—' : rainRisk+'%'}` +
+      (st.totalMM ? ` · 降水 ${st.totalMM}mm` : '')
     : `<b style="color:var(--green)">${modeTag}</b> · 当日基本无降水`;
 }
 
@@ -4457,13 +4955,13 @@ async function runRuleEngine(q){
     await requestAIPlan(spec);
     return null;
   }
-  if (/天气|下雨|降雪|下雪|淋雨/.test(text)){
+  if (/天气|下雨|降雨|降雪|下雪|雷暴|打雷|大雾|雾霾|沙尘|淋雨/.test(text)){
     switchTab(S.tab === 'route' ? 'route' : 'trip');
     renderRain(S.rainPct);
     const risk = rainRiskInfo(sliderToMin(S.rainPct), currentCommuteMinutes());
     return risk && risk.probability > 0
-      ? `当前路线通勤区间最高下雨可能性约 ${risk.probability}%，我已打开淋雨推演；如果你愿意，我可以继续生成驾车或公共交通的临时方案。`
-      : '当前没有足够的降雨数据，或这段通勤的降雨可能性较低。我已打开淋雨推演供你查看。';
+      ? `当前路线通勤区间最高${risk.label}可能性约 ${risk.probability}%，我已打开天气推演；如果你愿意，我可以继续生成驾车或公共交通的临时方案。`
+      : '当前没有足够的天气数据，或这段通勤没有明显恶劣天气。我已打开天气推演供你查看。';
   }
   if (/几点|出发|到达|来得及|迟到/.test(text)){
     const w = departWindow(), dep = sliderToMin(S.rainPct), arr = dep + currentCommuteMinutes();
@@ -4529,10 +5027,10 @@ function aiReply(q){
     `<b>${i+1}. ${aiEscape(x.h.n)}</b> · ${Math.round(x.t.score)} 分钟`
   ).join('<br>');
 
-  if (has('雨','淋','伞','下')){
+  if (has('雨','淋','伞','下雪','雷暴','打雷','大雾','雾霾','沙尘','天气')){
     const riskText = risk
-      ? `当前路线通勤区间的最高下雨可能性约 <b>${risk.probability}%</b>`
-      : '当前还没有足够的逐小时降水数据';
+      ? `当前路线通勤区间的最高${risk.label}可能性约 <b>${risk.probability}%</b>`
+      : '当前还没有足够的逐小时天气数据';
     return `${riskText}。<br>
       推荐先看 <b>${aiEscape(best.h.n)}</b>，当前路线约 ${Math.round(commute)} 分钟。<br>
       按考前 30 分钟到场倒推，最晚出发约为 <b>${fmtTime(start)}</b>；如果现在已经进入推演区间，建议尽快出发，路线受阻时可联系就近公安或交警协助到达。<br>
@@ -5315,7 +5813,7 @@ document.addEventListener('click', async e=>{
     S.rainModeChoice = null;
     store.set('rainEnabled', S.rainEnabled);
     render(); renderRain(S.rainPct);
-    toast(S.rainEnabled?'已开启：雨天默认驾车优先':'已关闭：按普通通勤时间推荐');
+    toast(S.rainEnabled?'已开启：恶劣天气推荐':'已关闭：按普通通勤时间推荐');
     return;
   }
   if (e.target.id==='changeSite'){ switchTab('pick'); return; }
@@ -5569,7 +6067,7 @@ if (rainToggle) rainToggle.onclick = e=>{
   const panel = $('rainPanel');
   if (panel) panel.classList.toggle('collapsed', S.rainPanelCollapsed);
   rainToggle.textContent = S.rainPanelCollapsed ? '⌃' : '⌄';
-  rainToggle.title = S.rainPanelCollapsed ? '展开降雨推演' : '收起降雨推演';
+  rainToggle.title = S.rainPanelCollapsed ? '展开天气推演' : '收起天气推演';
   rainToggle.setAttribute('aria-label', rainToggle.title);
 };
 
@@ -5750,17 +6248,20 @@ function buildMapModel(){
   }
 
   /* 等时圈：三种方式都传，只有当前方式高亮 */
-  const iso = ['walking','riding','driving'].map(k=>({
+  /* 路线规划页的中心是「已选住宿 → 考点」路线，不应继续显示
+     以考点为中心的预构建等时圈，避免视觉上把两套起点混在一起。 */
+  const showIso = S.tab !== 'route';
+  const iso = showIso ? ['walking','riding','driving'].map(k=>({
     key:k, poly: s.iso ? s.iso[k] : null, active: (!S.nearbyMode && cc.key === k),
-  }));
+  })) : [];
   /* 周边设施模式：只高亮「驾车 7km」等时圈 */
-  if (S.nearbyMode && s.isoDrive7){
+  if (showIso && S.nearbyMode && s.isoDrive7){
     iso.push({ key:'driving7', poly:s.isoDrive7, active:true, name:'驾车 7km' });
   }
 
   /* 服务点：落在「当前等时圈」内或校内的才显示 */
   const activePoly = s.iso ? s.iso[cc.key] : null;
-  const transitOn = (recommendationMode() === 'metro');
+  const transitOn = (mapViewMode() === 'metro');
   const inActive = pt => {
     if (inCampusPt(s, pt)) return true;
     if (transitOn) return distM(pt, c) <= (d.config ? d.config.transitRadius : 5000);
@@ -5868,7 +6369,7 @@ function buildMapModel(){
     spot: { name:(s.spots[0]||{}).name || '考点', point: c },
     hotels, pois,
     boundary: s.boundary || null,
-    iso, transitRadius: d.config ? d.config.transitRadius : 5000,
+    iso, transitRadius: showIso && d.config ? d.config.transitRadius : null,
     transitActive: transitOn,
     center: c, draggable: true,
   };
@@ -6009,7 +6510,7 @@ function renderRank(){
     return (d >= 1000 ? (d/1000).toFixed(1) + ' km' : d + ' m');
   };
 
-  /* ── 雨天提示条 + 「显示全部方式」开关 ──
+  /* ── 恶劣天气提示条 + 「显示全部方式」开关 ──
      不隐藏任何路线，只把不推荐的降级；这个开关让用户自己决定要不要看。 */
   const rb = $('rankRainBar');
   if (rb){
@@ -6017,8 +6518,10 @@ function renderRank(){
     else {
       /* 只统计**当前列表里**的住宿，避免「列表 2 家、却说 6 家有降级路线」 */
       const off = list.filter(h => routesFor(h).some(k => rainBlocked(k, h))).length;
+      const hazardLabel = S.weatherHazardLabel || '恶劣天气';
+      const hazardIcon = weatherTypeIcon(S.weatherHazardType || 'unknown');
       rb.innerHTML = `<div class="rain-bar">
-        <span>🌧 <b>雨天推荐</b>：已优先驾车${off ? `　·　${off} 家有不推荐的路线，已压暗标出` : ''}</span>
+        <span>${hazardIcon} <b>${hazardLabel}推荐</b>：已优先更稳妥路线${off ? `　·　${off} 家有不推荐的路线，已压暗标出` : ''}</span>
         <button class="rain-sw ${S.rainOverride?'on':''}" id="rankRainSw">${
           S.rainOverride ? '✓ 已显示全部方式' : '显示全部方式'}</button>
       </div>`;
@@ -6029,7 +6532,7 @@ function renderRank(){
         render();
         toast(S.rainOverride
           ? '已显示全部出行方式（不再按雨天预案降级）'
-          : '已恢复雨天推荐：优先驾车，不推荐的方式压暗显示');
+          : '已恢复恶劣天气推荐：优先更稳妥路线，不推荐的方式压暗显示');
       };
     }
   }
@@ -6073,7 +6576,7 @@ function renderRank(){
           (ISO_CONF[shown]||{}).label}">不在${(ISO_CONF[recMode]||{}).label}圈内</span>`
       : '';
     const rainNote = (rainRecommendationActive() && shown === 'drive')
-      ? `<span class="badge amber" title="考试通勤时段预计有降水，优先推荐驾车">🌧 雨天优先驾车</span>` : '';
+      ? `<span class="badge amber" title="考试通勤时段预计有恶劣天气，优先推荐更稳妥路线">${weatherTypeIcon(S.weatherHazardType || 'unknown')} 恶劣天气优先驾车</span>` : '';
 
     const chips = avail.map(k=>{
       const c2 = ISO_CONF[k] || {};
@@ -6082,8 +6585,8 @@ function renderRank(){
       const blocked = rainBlocked(k, h);
       const timeBlocked = !routeWithinTodayWindow(h, k);
       const why = blocked
-        ? (k === 'bike' ? '雨天骑行淋雨风险较高，仍可点击查看'
-         : k === 'walk' ? '雨天步行暴露较多，仍可点击查看'
+        ? (k === 'bike' ? '恶劣天气骑行暴露风险较高，仍可点击查看'
+         : k === 'walk' ? '恶劣天气步行暴露较多，仍可点击查看'
          : '百度未返回较短的公交步行接驳距离，仍可点击查看')
         : '';
       const title = timeBlocked
@@ -7934,15 +8437,17 @@ function originGeoHint(){
 }
 
 /* ══════════════════════════════════════════════════════════════
-   雨天推荐 · 自动启动
+   恶劣天气推荐 · 自动启动
    ──────────────────────────────────────────────────────────────
    规则（按需求）：
      · 考试日期距今 ≤3 天（含当天）→ 查实时天气 + 当天/近日预报
-     · 判定有雨 → 自动开启「雨天推荐」
-     · 雨天模式下：只显示【驾车】路线 + 【2000m 外】的公共交通路线
+     · 判定有雨、雪、雷暴或大雾 → 自动开启「恶劣天气推荐」
+     · 恶劣天气模式下：只显示【驾车】路线 + 【2000m 外】的公共交通路线
    ══════════════════════════════════════════════════════════════ */
-S.rainMode = false;        // 是否处于雨天推荐
-S.rainOverride = false;    // 雨天要不要「显示全部出行方式」（不推荐的那些也列出来）
+S.rainMode = false;        // 是否处于恶劣天气推荐
+S.weatherHazardType = null;
+S.weatherHazardLabel = '';
+S.rainOverride = false;    // 是否显示全部出行方式
 S.rainAuto = false;        // 是否由自动规则开启
 
 async function autoRainCheck(){
@@ -7951,6 +8456,8 @@ async function autoRainCheck(){
   if (!S.rainEnabled){
     if (S.rainMode || S.rainAuto || S.rainModeChoice){
       S.rainMode = false;
+      S.weatherHazardType = null;
+      S.weatherHazardLabel = '';
       S.rainAuto = false;
       S.rainModeChoice = null;
       render();
@@ -7962,7 +8469,8 @@ async function autoRainCheck(){
   /* 只在「当天或近三天」才自动判定 */
   if (d < 0 || d > 3){
     if (S.rainMode || S.rainAuto || S.rainModeChoice){
-      S.rainMode = false; S.rainAuto = false; S.rainModeChoice = null; render();
+      S.rainMode = false; S.rainAuto = false; S.rainModeChoice = null;
+      S.weatherHazardType = null; S.weatherHazardLabel = ''; render();
     }
     return;
   }
@@ -7974,29 +8482,40 @@ async function autoRainCheck(){
     const day = await KDRWeather.day(lat, lng, ex.date);  // 当天/近日预报
     if (requestId !== S.weatherRequestId) return;
     const sim = rainSimulationWindow();
-    const rainAt = minutes => KDRWeather.precipAt(day, minutes) >= 0.1;
-    /* 只看考试通勤窗口，不把晚上或其它场次的降雨误判成当前推荐依据。 */
-    let willRain = false;
+    const hazardAt = minutes => {
+      const type = weatherTypeAt(day, minutes);
+      return weatherSeverity(type) > 0 ? type : null;
+    };
+    /* 只看考试通勤窗口，不把晚上或其它场次的天气误判成当前推荐依据。 */
+    let hazardType = null;
     const end = Math.min(1439, examStart() + 30);
     for (let m = Math.max(0, sim.start); m <= end; m += 15){
-      if (rainAt(m)){ willRain = true; break; }
+      const type = hazardAt(m);
+      if (type && (!hazardType || weatherSeverity(type) > weatherSeverity(hazardType))){
+        hazardType = type;
+      }
     }
     const nowMin = new Date().getHours()*60 + new Date().getMinutes();
-    const nowRain = d === 0 && nowMin <= examStart() + 30 && (cur.precip || 0) >= 0.1;
-    const rain = nowRain || willRain;
-    S.rainMode = rain;
+    const nowType = d === 0 && nowMin <= examStart() + 30
+      ? weatherTypeFromCode(cur.code, cur.temp, cur.precip)
+      : 'unknown';
+    if (weatherSeverity(nowType) > weatherSeverity(hazardType)) hazardType = nowType;
+    const hazard = !!hazardType;
+    S.rainMode = hazard;
+    S.weatherHazardType = hazardType;
+    S.weatherHazardLabel = hazardType ? weatherTypeLabel(hazardType) : '';
     S.rainAuto = true;
     S.rainModeChoice = null;
     render(); renderRain(S.rainPct);
-    toast(rain
-      ? '🌧 考试通勤时段有降水，已启动雨天推荐（默认驾车优先）'
-      : '☀️ 考试通勤时段暂无降水，已关闭雨天推荐');
+    toast(hazard
+      ? `${weatherTypeIcon(hazardType)} 考试通勤时段预计有${weatherTypeLabel(hazardType)}，已启动恶劣天气推荐`
+      : '☀️ 考试通勤时段暂无明显恶劣天气，已关闭恶劣天气推荐');
   }catch(e){
-    console.warn('[KDR] 雨天自动判定失败', e);
+    console.warn('[KDR] 恶劣天气自动判定失败', e);
   }
 }
 
-/* 雨天默认驾车；公交有真实方案且上下车接驳步行总距离较短时，也保留推荐。 */
+/* 恶劣天气下优先稳妥路线；公交有真实方案且接驳步行较短时，也保留推荐。 */
 function routeAllowed(kind, h){
   if (!rainRecommendationActive()) return true;
   if (kind === 'drive') return true;
