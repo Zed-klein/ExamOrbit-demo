@@ -879,7 +879,7 @@ select.input{cursor:pointer}
           <div id="aiNotice"></div>
           <div class="chatwrap" id="chat"></div>
           <div class="aiinput">
-            <input id="aiInput" placeholder="问点什么：哪家酒店早上走最稳？" autocomplete="off">
+            <input id="aiInput" placeholder="问点什么：输入考点名称，或说“从酒店到考点”" autocomplete="off">
             <button id="aiSend">发送</button>
           </div>
           <div class="aiattach">
@@ -890,12 +890,12 @@ select.input{cursor:pointer}
           </div>
           <div id="aiImagePreview" class="ai-image-preview hidden"></div>
           <div class="pills" id="quickAsk" style="margin-top:9px">
-            <span class="pill" data-q="哪家酒店早上走最稳？">哪家最稳</span>
-            <span class="pill" data-q="我不想淋雨，几点出发？">几点出发</span>
-            <span class="pill" data-q="地铁方案怎么样？">地铁方案</span>
-            <span class="pill" data-q="到考场要多久？">要多久</span>
-            <span class="pill" data-q="考场附近有打印店和派出所吗？">打印店/派出所</span>
-            <span class="pill" data-q="综合推荐一下：住哪、几点出发、沿途能办什么事？">综合推荐</span>
+            <span class="pill" data-q="帮我定位一个考点">输入考点</span>
+            <span class="pill" data-q="选择住宿">选择住宿</span>
+            <span class="pill" data-q="输入出发地点">输入出发点</span>
+            <span class="pill" data-q="改成公共交通">切换出行方式</span>
+            <span class="pill" data-q="打开淋雨推演，告诉我最晚几点出发">查看出发时间</span>
+            <span class="pill" data-q="查询当前考点附近的打印店、药店和派出所">查周边服务</span>
           </div>
           <div class="tip-note" style="margin-top:13px">
             AI 负责理解需求、给出建议和组合规划；地图、天气、距离和时间仍由本作品的真实数据计算。
@@ -4281,6 +4281,25 @@ async function runRuleEngine(q){
 
   /* 工作流确认优先于范围判断：用户回复“1”“是”本身没有业务关键词，
      但在候选/确认状态下它们是完整且明确的操作。 */
+  if (pending && pending.type === 'workflow-site-input'){
+    const siteQuery = aiExtractSiteQuery(text);
+    if (!siteQuery){
+      return '请直接输入学校、学院或校区名称，例如“北京大学”“中山大学南校区”或完整地址。';
+    }
+    S.aiPending = null;
+    await aiSearchSite(siteQuery, 'nearby', {});
+    return null;
+  }
+  if (pending && pending.type === 'workflow-origin-input'){
+    const request = aiExtractRouteRequest(text);
+    const originQuery = request.originQuery || aiCleanPlace(text);
+    if (!originQuery || originQuery.length < 2){
+      return '请直接输入酒店、住址或车站名称，例如“杭州东站”或“西湖边的酒店”。';
+    }
+    S.aiPending = null;
+    await aiSearchOrigin(originQuery, request.mode || pending.mode || S.mode);
+    return null;
+  }
   if (pending && pending.type === 'workflow-site-choice'){
     const index = aiChoiceIndex(text, pending.candidates);
     const candidate = index >= 0 ? pending.candidates[index] : null;
@@ -4346,6 +4365,21 @@ async function runRuleEngine(q){
   if (!aiScopeOK(text)) return aiOutOfScopeReply();
   if (/清除|取消|删除/.test(text) && /临时|AI|规划/.test(text)){
     clearAIPlan(); return '已清除地图上的临时 AI 规划，前四个界面的正式方案没有变化。';
+  }
+  if (/^(?:帮我)?(?:定位|搜索|查找)(?:一个)?(?:考点|学校|校区)$/.test(text)
+      || /^输入(?:一个)?考点(?:名称)?$/.test(text)){
+    S.aiPending = {type:'workflow-site-input', token:++aiChoiceId};
+    pushMsg('ai','请直接输入学校、学院或校区名称，我会先用百度地图检索候选，再让你确认具体考点。','');
+    return null;
+  }
+  if (/^(?:请)?(?:先)?输入(?:一个)?(?:出发地点|出发点|起点)$/.test(text)
+      || /^(?:帮我)?定位出发(?:地点|点)$/.test(text)){
+    if (!S.nearbyReady || !SITE()){
+      return '请先输入并确认考点，生成周边设施后，我才能定位出发地点。';
+    }
+    S.aiPending = {type:'workflow-origin-input', mode:S.mode || null, token:++aiChoiceId};
+    pushMsg('ai','请直接输入酒店、住址或车站名称；也可以输入“从某地出发，优先公共交通”。','');
+    return null;
   }
   if (/打开|切换|进入/.test(text)){
     const tab = /考点选择/.test(text) ? 'pick'
@@ -5144,7 +5178,7 @@ document.addEventListener('click', async e=>{
   if (e.target.closest('#btnSettings') || e.target.id==='aiCfgLink'){ openSettings(); return; }
   if (e.target.closest('#tabs button')){ switchTab(e.target.closest('#tabs button').dataset.tab); return; }
   if (e.target.closest('.quick span')){ sendAI(e.target.closest('.quick span').dataset.q); return; }
-  if (e.target.id==='aiState'){ aiConfigured()? sendAI('哪家酒店早上走最稳？') : openSettings(); return; }
+  if (e.target.id==='aiState'){ aiConfigured()? sendAI('帮我定位一个考点') : openSettings(); return; }
 });
 
 /* 设置弹窗 */
