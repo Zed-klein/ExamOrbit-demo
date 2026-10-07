@@ -24,18 +24,6 @@
 
 直接打开 **[在线演示](https://zed-klein.github.io/ExamOrbit-demo/)**。页面内置浙江大学紫金港校区的案例，也支持输入自己的考点。
 
-本项目没有构建步骤或后端依赖。本地运行：
-
-```bash
-git clone https://github.com/Zed-klein/ExamOrbit-demo.git
-cd ExamOrbit-demo
-python3 -m http.server 8899
-```
-
-访问 `http://127.0.0.1:8899/`。请从包含 `index.html`、`config/`、`src/` 和 `data/` 的目录启动静态服务器；如果这些文件位于子目录，则进入该子目录后启动。
-
-使用 `localhost` 或 HTTPS 可以减少浏览器定位及跨域调用的限制。直接双击 `index.html` 可查看部分内容，但 `file://` 环境可能阻止定位、地图请求或模型接口访问。
-
 ### 如何使用
 
 1. 在“考点选择”搜索学校或使用地图选点；也可点击页面内的浙江大学案例快速体验。
